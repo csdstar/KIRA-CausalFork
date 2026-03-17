@@ -8,6 +8,7 @@ from kiraclaw_agentd.telegram_adapter import (
     _clean_prompt_text,
     _display_name,
     _is_authorized_user_name,
+    _matches_exact_name_at_start,
     _matchable_name,
     _reply_to_message_id,
     _session_id_from_message,
@@ -28,6 +29,7 @@ def test_matchable_name_includes_username_and_full_name() -> None:
 def test_telegram_prompt_cleanup_strips_bot_mention() -> None:
     assert _clean_prompt_text("  @kira_bot   check   this  ", "kira_bot", mention=True) == "check this"
     assert _clean_prompt_text("  hello   there ", "kira_bot", mention=False) == "hello there"
+    assert _clean_prompt_text("세나, check this", "kira_bot", mention=False, agent_name="세나", direct_name_call=True) == "check this"
 
 
 def test_telegram_message_filter_accepts_private_and_mentions() -> None:
@@ -48,10 +50,19 @@ def test_telegram_message_filter_accepts_private_and_mentions() -> None:
         "reply_to_message": {"from": {"id": 999}},
     }
 
-    assert _should_handle_message(private, "kira_bot", 999) is True
-    assert _should_handle_message(group, "kira_bot", 999) is True
-    assert _should_handle_message(reply, "kira_bot", 999) is True
-    assert _should_handle_message({"chat": {"type": "group"}, "from": {"is_bot": False}, "text": "hello"}, "kira_bot", 999) is False
+    assert _should_handle_message(private, "kira_bot", 999, "세나") is True
+    assert _should_handle_message(group, "kira_bot", 999, "세나") is True
+    assert _should_handle_message(reply, "kira_bot", 999, "세나") is True
+    assert _should_handle_message({"chat": {"type": "group"}, "from": {"is_bot": False}, "text": "세나 hello"}, "kira_bot", 999, "세나") is True
+    assert _should_handle_message({"chat": {"type": "group"}, "from": {"is_bot": False}, "text": "세나야 hello"}, "kira_bot", 999, "세나") is False
+    assert _should_handle_message({"chat": {"type": "group"}, "from": {"is_bot": False}, "text": "hello"}, "kira_bot", 999, "세나") is False
+
+
+def test_telegram_exact_name_match_is_strict() -> None:
+    assert _matches_exact_name_at_start("세나 hello", "세나") is True
+    assert _matches_exact_name_at_start("세나, hello", "세나") is True
+    assert _matches_exact_name_at_start("세나야 hello", "세나") is False
+    assert _matches_exact_name_at_start("hello 세나", "세나") is False
 
 
 def test_telegram_message_sessions_and_reply_targets() -> None:
@@ -228,5 +239,49 @@ def test_telegram_messages_from_same_user_are_debounced_and_merged(tmp_path) -> 
         assert len(session_manager.calls) == 1
         assert session_manager.calls[0]["prompt"] == "first\nsecond"
         assert sent == [{"chat_id": 123, "text": "telegram ok", "reply_to_message_id": None}]
+
+    asyncio.run(scenario())
+
+
+def test_telegram_group_exact_name_call_is_accepted_and_cleaned(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            telegram_enabled=False,
+            agent_name="세나",
+        )
+        session_manager = _FakeSessionManager()
+        gateway = TelegramGateway(session_manager, settings, debounce_seconds=0.05)
+        sent: list[dict] = []
+
+        async def fake_send(chat_id, text, reply_to_message_id=None):
+            sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_to_message_id": reply_to_message_id,
+                }
+            )
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+        gateway.identity = {"id": 999, "username": "jiho_kira_bot", "first_name": "지호봇"}
+
+        message = {
+            "chat": {"id": -100, "type": "group"},
+            "from": {"id": 10, "username": "batteryho", "first_name": "지호", "last_name": "전", "is_bot": False},
+            "message_id": 52,
+            "text": "세나, 상태 알려줘",
+        }
+
+        assert _should_handle_message(message, "jiho_kira_bot", 999, "세나") is True
+        await gateway._handle_message(message)
+        await asyncio.sleep(0.12)
+
+        assert len(session_manager.calls) == 1
+        assert session_manager.calls[0]["prompt"] == "상태 알려줘"
+        assert sent == [{"chat_id": -100, "text": "telegram ok", "reply_to_message_id": 52}]
 
     asyncio.run(scenario())

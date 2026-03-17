@@ -9,6 +9,7 @@ from typing import Any
 
 import aiohttp
 
+from kiraclaw_agentd.bot_call_detector import BotCallDetector, matches_exact_name_at_start
 from kiraclaw_agentd.channel_debounce import KeyedDebouncer
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
@@ -77,13 +78,28 @@ def _display_name(user: dict[str, Any]) -> str:
     return full or str(user.get("id") or "Telegram")
 
 
+def _matches_exact_name_at_start(text: str, agent_name: str | None) -> bool:
+    return matches_exact_name_at_start(text, agent_name)
+
+
 def _is_private_chat(message: dict[str, Any]) -> bool:
     return str(message.get("chat", {}).get("type", "")) == "private"
 
 
-def _clean_prompt_text(text: str, bot_username: str | None, *, mention: bool) -> str:
+def _clean_prompt_text(
+    text: str,
+    bot_username: str | None,
+    *,
+    mention: bool,
+    agent_name: str | None = None,
+    direct_name_call: bool = False,
+) -> str:
     if mention and bot_username:
         text = re.sub(fr"@{re.escape(bot_username)}\b", " ", text, flags=re.IGNORECASE)
+    elif direct_name_call:
+        from kiraclaw_agentd.bot_call_detector import strip_exact_name_at_start
+
+        text = strip_exact_name_at_start(text, agent_name)
     return _normalize_text(text)
 
 
@@ -110,24 +126,25 @@ def _merge_context_prefix(*parts: str | None) -> str | None:
     return "\n\n".join(merged)
 
 
-def _should_handle_message(message: dict[str, Any], bot_username: str | None, bot_id: int | None) -> bool:
-    if not message.get("text"):
-        return False
-
+def _should_handle_message(
+    message: dict[str, Any],
+    bot_username: str | None,
+    bot_id: int | None,
+    agent_name: str | None = None,
+) -> bool:
+    text = str(message.get("text", ""))
     user = message.get("from", {})
-    if user.get("is_bot"):
-        return False
-
-    if _is_private_chat(message):
-        return True
-
-    if bot_id and message.get("reply_to_message", {}).get("from", {}).get("id") == bot_id:
-        return True
-
-    if bot_username and f"@{bot_username.lower()}" in str(message.get("text", "")).lower():
-        return True
-
-    return False
+    mention = bool(bot_username and f"@{bot_username.lower()}" in text.lower())
+    reply_to_bot = bool(bot_id and message.get("reply_to_message", {}).get("from", {}).get("id") == bot_id)
+    detector = BotCallDetector(agent_name)
+    decision = detector.detect_telegram(
+        text=text,
+        is_private_chat=_is_private_chat(message),
+        mention=mention,
+        reply_to_bot=reply_to_bot,
+        sender_is_bot=bool(user.get("is_bot")),
+    )
+    return decision.should_respond
 
 
 def _session_id_from_message(message: dict[str, Any]) -> str:
@@ -173,6 +190,7 @@ class TelegramGateway:
             on_flush=self._flush_debounced_messages,
             label="telegram",
         )
+        self._bot_call_detector = BotCallDetector(settings.agent_name)
         if self.configured:
             self.state = "configured"
 
@@ -285,7 +303,19 @@ class TelegramGateway:
     async def _handle_message(self, message: dict[str, Any]) -> None:
         bot_username = str(self.identity.get("username") or "")
         bot_id = int(self.identity.get("id") or 0) or None
-        if not _should_handle_message(message, bot_username, bot_id):
+        if not message.get("text"):
+            return
+        text = str(message.get("text", ""))
+        mention = bool(bot_username and f"@{bot_username.lower()}" in text.lower())
+        reply_to_bot = bool(bot_id and message.get("reply_to_message", {}).get("from", {}).get("id") == bot_id)
+        decision = self._bot_call_detector.detect_telegram(
+            text=text,
+            is_private_chat=_is_private_chat(message),
+            mention=mention,
+            reply_to_bot=reply_to_bot,
+            sender_is_bot=bool(message.get("from", {}).get("is_bot")),
+        )
+        if not decision.should_respond:
             return
 
         user = message.get("from", {})
@@ -295,8 +325,13 @@ class TelegramGateway:
             logger.info("Ignoring unauthorized Telegram user: %s", matchable_name)
             return
 
-        mention = not _is_private_chat(message)
-        prompt = _clean_prompt_text(str(message.get("text", "")), bot_username, mention=mention)
+        prompt = _clean_prompt_text(
+            text,
+            bot_username,
+            mention=mention,
+            agent_name=self.settings.agent_name,
+            direct_name_call=decision.direct_name_call,
+        )
         if not prompt:
             return
 

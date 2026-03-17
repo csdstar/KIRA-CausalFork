@@ -7,6 +7,7 @@ from kiraclaw_agentd.slack_adapter import (
     _build_delivery_context_prefix,
     _clean_prompt_text,
     _is_authorized_user_name,
+    _matches_exact_name_at_start,
     _parse_allowed_names,
     _reply_thread_ts_from_event,
     _session_id_from_event,
@@ -26,10 +27,23 @@ def test_clean_prompt_text_keeps_dm_text_intact() -> None:
 
 
 def test_should_handle_message_only_accepts_human_dms() -> None:
-    assert _should_handle_message({"channel_type": "im"}) is True
-    assert _should_handle_message({"channel_type": "channel"}) is False
-    assert _should_handle_message({"channel_type": "im", "subtype": "message_changed"}) is False
-    assert _should_handle_message({"channel_type": "im", "bot_id": "B123"}) is False
+    assert _should_handle_message({"channel_type": "im"}, "세나") is True
+    assert _should_handle_message({"channel_type": "channel", "text": "hello"}, "세나") is False
+    assert _should_handle_message({"channel_type": "channel", "text": "세나 hello"}, "세나") is True
+    assert _should_handle_message({"channel_type": "channel", "text": "세나야 hello"}, "세나") is False
+    assert _should_handle_message({"channel_type": "im", "subtype": "message_changed"}, "세나") is False
+    assert _should_handle_message({"channel_type": "im", "bot_id": "B123"}, "세나") is False
+
+
+def test_matches_exact_name_at_start_is_strict() -> None:
+    assert _matches_exact_name_at_start("세나 hello", "세나") is True
+    assert _matches_exact_name_at_start("세나, hello", "세나") is True
+    assert _matches_exact_name_at_start("세나야 hello", "세나") is False
+    assert _matches_exact_name_at_start("hello 세나", "세나") is False
+
+
+def test_clean_prompt_text_strips_direct_name_call() -> None:
+    assert _clean_prompt_text("세나, check this", mention=False, agent_name="세나", direct_name_call=True) == "check this"
 
 
 def test_dm_messages_use_channel_session_and_main_channel_reply() -> None:
@@ -257,5 +271,43 @@ def test_slack_messages_from_same_user_are_debounced_and_merged(tmp_path) -> Non
         assert len(session_manager.calls) == 1
         assert session_manager.calls[0]["prompt"] == "first\nsecond"
         assert client.sent_messages == [{"channel": "D1", "text": "ok", "thread_ts": None}]
+
+    asyncio.run(scenario())
+
+
+def test_slack_group_exact_name_call_is_accepted_and_cleaned(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            agent_name="세나",
+        )
+        session_manager = _FakeSessionManager()
+        gateway = SlackGateway(session_manager, settings, debounce_seconds=0.05)
+        gateway.identity = {"user_id": "UBOT"}
+        client = _FakeSlackClient()
+
+        async def fake_bootstrap_context(*, client, event, excluded_timestamps=None):
+            return None
+
+        gateway._build_slack_bootstrap_context = fake_bootstrap_context  # type: ignore[method-assign]
+
+        event = {
+            "channel": "C1",
+            "channel_type": "channel",
+            "ts": "101.0",
+            "user": "U1",
+            "text": "세나, 상태 알려줘",
+        }
+
+        assert _should_handle_message(event, "세나") is True
+        await gateway._schedule_event(event, client, logging.getLogger("test-slack"), mention=False)
+        await asyncio.sleep(0.12)
+
+        assert len(session_manager.calls) == 1
+        assert session_manager.calls[0]["prompt"] == "상태 알려줘"
+        assert client.sent_messages == [{"channel": "C1", "text": "ok", "thread_ts": "101.0"}]
 
     asyncio.run(scenario())

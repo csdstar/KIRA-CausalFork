@@ -11,6 +11,7 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
+from kiraclaw_agentd.bot_call_detector import BotCallDetector, matches_exact_name_at_start
 from kiraclaw_agentd.channel_debounce import KeyedDebouncer
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
@@ -56,9 +57,17 @@ def _is_authorized_user_name(user_name: str, allowed_names: str) -> bool:
     return False
 
 
-def _clean_prompt_text(text: str, *, mention: bool) -> str:
+def _matches_exact_name_at_start(text: str, agent_name: str | None) -> bool:
+    return matches_exact_name_at_start(text, agent_name)
+
+
+def _clean_prompt_text(text: str, *, mention: bool, agent_name: str | None = None, direct_name_call: bool = False) -> str:
     if mention:
         text = _APP_MENTION_RE.sub(" ", text)
+    elif direct_name_call:
+        from kiraclaw_agentd.bot_call_detector import strip_exact_name_at_start
+
+        text = strip_exact_name_at_start(text, agent_name)
     return _normalize_text(text)
 
 
@@ -116,12 +125,16 @@ def _reply_thread_ts_from_event(event: dict[str, Any]) -> str | None:
     return event.get("thread_ts") or event.get("ts")
 
 
-def _should_handle_message(event: dict[str, Any]) -> bool:
-    if event.get("subtype"):
-        return False
-    if event.get("bot_id"):
-        return False
-    return _is_dm(event)
+def _should_handle_message(event: dict[str, Any], agent_name: str | None = None) -> bool:
+    detector = BotCallDetector(agent_name)
+    decision = detector.detect_slack(
+        text=str(event.get("text", "")),
+        is_dm=_is_dm(event),
+        mention=False,
+        subtype=event.get("subtype"),
+        bot_id=event.get("bot_id"),
+    )
+    return decision.should_respond
 
 
 class SlackGateway:
@@ -147,6 +160,7 @@ class SlackGateway:
             on_flush=self._flush_debounced_events,
             label="slack",
         )
+        self._bot_call_detector = BotCallDetector(settings.agent_name)
         if self.configured:
             self.state = "configured"
             self._ensure_app()
@@ -171,9 +185,9 @@ class SlackGateway:
 
         @self.app.event("message")
         async def on_message(event, client, logger):
-            if not _should_handle_message(event):
+            if not _should_handle_message(event, self.settings.agent_name):
                 return
-            logger.info("Slack DM received: channel=%s user=%s", event.get("channel"), event.get("user"))
+            logger.info("Slack message received: channel=%s user=%s", event.get("channel"), event.get("user"))
             await self._schedule_event(event, client, logger, mention=False)
 
     def _ensure_app(self) -> None:
@@ -300,6 +314,16 @@ class SlackGateway:
         text = event.get("text", "").strip()
         if not text:
             return
+        decision = self._bot_call_detector.detect_slack(
+            text=text,
+            is_dm=_is_dm(event),
+            mention=mention,
+            subtype=event.get("subtype"),
+            bot_id=event.get("bot_id"),
+        )
+        if not decision.should_respond:
+            logger.info("Ignoring Slack message without explicit bot call: channel=%s user=%s", event.get("channel"), event.get("user"))
+            return
 
         session_id = _session_id_from_event(event)
         channel = event["channel"]
@@ -309,7 +333,12 @@ class SlackGateway:
         if not _is_authorized_user_name(user_name, self.settings.slack_allowed_names):
             logger.info("Ignoring unauthorized Slack user: user=%s name=%s", user, user_name)
             return
-        cleaned_text = _clean_prompt_text(text, mention=mention)
+        cleaned_text = _clean_prompt_text(
+            text,
+            mention=mention,
+            agent_name=self.settings.agent_name,
+            direct_name_call=decision.direct_name_call,
+        )
         if not cleaned_text:
             return
         logger.info(

@@ -15,11 +15,13 @@ from typing import Any
 
 import litellm
 from litellm.exceptions import (
+    AuthenticationError as LiteLLMAuthenticationError,
     BadRequestError,
     ContextWindowExceededError as LiteLLMContextWindowExceededError,
 )
 from tenacity import (
     retry,
+    retry_if_exception_type,
     retry_if_not_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -455,7 +457,18 @@ class TerminusKira(Terminus2):
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-        retry=retry_if_not_exception_type(BadRequestError),
+        retry=(
+            retry_if_exception_type(Exception)
+            & retry_if_not_exception_type(
+                (
+                    BadRequestError,
+                    LiteLLMAuthenticationError,
+                    ContextLengthExceededError,
+                    OutputLengthExceededError,
+                )
+            )
+        ),
+        reraise=True,
     )
     async def _call_llm_for_image(
         self,
@@ -569,7 +582,18 @@ class TerminusKira(Terminus2):
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-        retry=retry_if_not_exception_type(BadRequestError),
+        retry=(
+            retry_if_exception_type(Exception)
+            & retry_if_not_exception_type(
+                (
+                    BadRequestError,
+                    LiteLLMAuthenticationError,
+                    ContextLengthExceededError,
+                    OutputLengthExceededError,
+                )
+            )
+        ),
+        reraise=True,
     )
     async def _call_llm_with_tools(
         self,

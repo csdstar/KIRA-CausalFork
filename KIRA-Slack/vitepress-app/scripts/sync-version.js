@@ -23,8 +23,14 @@ const files = [
 
 // Regex to match version patterns
 const patterns = [
-  { regex: /KIRA-\d+\.\d+\.\d+-(universal|arm64)\.dmg/g, replace: `KIRA-${version}-arm64.dmg` },
-  { regex: /KIRA[- ]Setup[- ]\d+\.\d+\.\d+\.exe/g, replace: `KIRA Setup ${version}.exe` }
+  {
+    regex: /https:\/\/kira\.krafton-ai\.com\/(?:download\/KIRA-\d+\.\d+\.\d+-(?:universal|arm64)\.dmg|kiraclaw-download\/KiraClaw-\d+\.\d+\.\d+-arm64\.dmg)/g,
+    replace: `https://kira.krafton-ai.com/kiraclaw-download/KiraClaw-${version}-arm64.dmg`
+  },
+  {
+    regex: /https:\/\/kira\.krafton-ai\.com\/(?:download\/KIRA(?:%20| )Setup(?:%20| )\d+\.\d+\.\d+\.exe|kiraclaw-download\/KiraClaw-\d+\.\d+\.\d+-x64\.exe)/g,
+    replace: `https://kira.krafton-ai.com/kiraclaw-download/KiraClaw-${version}-x64.exe`
+  }
 ];
 
 let updated = 0;

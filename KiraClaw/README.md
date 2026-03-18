@@ -1,93 +1,114 @@
 # KiraClaw
 
-KiraClaw is the next product line after KIRA-Slack.
-The target is to follow OpenClaw as closely as possible while staying simple.
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-green)](https://nodejs.org/)
+[![Electron](https://img.shields.io/badge/electron-39.x-9feaf9)](https://www.electronjs.org/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)]()
+[![Bridge](https://img.shields.io/badge/migration-KIRA--Slack%20bridge-orange)](docs/migration-from-kira-slack.md)
 
-The first principle is to keep the architecture small:
+Agentic desktop runtime for KIRA.
 
-- `krim-sdk` is the embedded agent engine.
-- `agentd` is the local long-running gateway.
-- `desktop` is the packaged local app for install, config, logs, updates, and future direct chat.
-- KIRA-Slack remains the bridge for user migration and auto-update.
-
-## Agentic Model
-
-KiraClaw now treats the local engine more like a thinking core than a direct reply generator.
+KiraClaw is the successor product line to `KIRA-Slack`. It keeps the local desktop product shape, but moves the runtime toward a more agentic model:
 
 - adapters are the outside ears and mouth
 - the core agent thinks, plans, and chooses tools
 - `speak` is the explicit outward speech action
-- `internal_summary` is the internal run summary kept for QA and diagnostics
-- the legacy wire field `final_response` still carries that same internal summary for compatibility
+- `internal_summary` is the internal run summary for QA and diagnostics
 - memory has both implicit runtime behavior and explicit index tools
 
-This keeps the product closer to an agent runtime than to a simple chat wrapper.
+`KIRA-Slack` is now the legacy product line used only for bridge migration and auto-update replacement. New runtime work happens in `KiraClaw`.
 
-## Current Scope
+---
 
-This folder starts with the smallest useful slice:
+## What Is KiraClaw?
 
-- architecture and migration docs
-- bridge release checklist
-- a minimal `agentd` built on `krim-sdk`
-- a desktop workspace that stays part of the product plan
-- Slack and Telegram channel adapters
-- direct desktop chat against the same daemon
-- schedules as the current automation surface
+KiraClaw is a local AI agent runtime that combines:
 
-It does not try to recreate KIRA-Slack all at once.
+- a long-running local gateway
+- a desktop control plane
+- channel adapters for Slack and Telegram
+- local memory, skills, schedules, and run logs
 
-## Why This Exists
+It is closer to an agent runtime than to a simple chat wrapper.
 
-KRIM already proved the core agent loop can stay small.
-KIRA-Slack already proved the product shell needs desktop packaging, config, update, and local data handling.
+The design goal is small and explicit:
 
-KiraClaw combines those lessons without inheriting KIRA-Slack's full complexity.
+- `krim-sdk` is the external agent engine
+- `agentd` is the local gateway
+- `desktop` is the packaged shell for setup, status, runs, logs, and direct chat
+- schedules are the current automation surface
 
-## Initial Layout
+---
 
-```text
-KiraClaw/
-  apps/
-    agentd/     # Local Python gateway using krim-sdk
-    desktop/    # Desktop shell for the packaged product
-  docs/
-    architecture.md
-    bridge-release-checklist.md
-    migration-from-kira-slack.md
-  pyproject.toml
-  package.json
-```
+## Why It Exists
 
-## Product Assumptions
+`KIRA-Slack` proved the product shell:
 
-- Slack remains the first real channel, with Telegram as a lightweight second channel.
-- The desktop app still exists as a first-class product shell.
-- The desktop app is already a direct chat surface and control plane.
-- Long-running work is a primary use case.
-- `krim-sdk.Agent` is the core execution loop.
-- One long-running gateway per host is the default shape.
-- Bridge mode should feel like the existing KIRA-Slack install.
-- Shared rooms should be treated as spaces the agent can listen to without being forced to reply every time.
+- desktop packaging
+- local settings
+- update flow
+- channel integrations
+- local data handling
 
-## Bridge Compatibility
+`KRIM` proved the core loop can stay small.
 
-The daemon now prefers legacy KIRA-Slack state when it already exists:
+KiraClaw combines those lessons without dragging the old multi-agent Slack-first structure forward.
 
-- `KIRACLAW_HOME_MODE=auto` uses `~/.kira` before `~/.kiraclaw`
-- legacy `~/.kira/config.env` is used to backfill Slack tokens and workspace base dir
-- legacy `~/.kira/credential.json` is reused for Vertex AI if no explicit provider was set
-- `KIRACLAW_PROVIDER` can still be set to `claude`, `openai`, or `vertex_ai`
+---
 
-## Running The Daemon
+## Current Product Shape
+
+### Core surfaces
+
+- `Talk`: direct local chat against the same daemon
+- `Channels`: Slack and Telegram on the same runtime
+- `Skills`: workspace skills loaded from `Filesystem Base Dir/skills`
+- `Schedules`: time-based automation runs
+- `Runs`: recent run logs, internal summaries, spoken replies, and tool usage
+
+### Current runtime rules
+
+- shared rooms are treated as ambient spaces, not strict one-user request channels
+- grouped room messages are passed in as room transcripts
+- outward speech in channels should happen through `speak`
+- silent completion is valid for schedules and shared-room runs
+- run-level observability is persisted to `Filesystem Base Dir/logs/runs.jsonl`
+
+### Legacy compatibility
+
+The daemon still supports bridge-mode compatibility with existing `KIRA-Slack` installs:
+
+- `KIRACLAW_HOME_MODE=auto` prefers `~/.kira` before `~/.kiraclaw`
+- legacy `~/.kira/config.env` is used to backfill tokens and workspace settings
+- legacy `~/.kira/credential.json` is reused for Vertex AI when needed
+
+See [migration-from-kira-slack.md](docs/migration-from-kira-slack.md).
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- `uv`
+
+Optional:
+
+- Slack app credentials
+- Telegram bot token
+- Anthropic / OpenAI / Vertex credentials depending on provider
+
+### Run the daemon
 
 ```bash
-cd /Users/batteryho/Documents/github/KIRA/KiraClaw
+cd KiraClaw
 cp .env.example .env
 uv run kiraclaw-agentd
 ```
 
-Then check:
+Check health:
 
 ```bash
 curl http://127.0.0.1:8787/health
@@ -102,30 +123,153 @@ Useful endpoints:
 - `GET /v1/skills`
 - `POST /v1/runs`
 
-Slack startup is automatic when the Slack tokens are present in `.env` or legacy `~/.kira/config.env`.
-
-## Running The Desktop Shell
+### Run the desktop shell
 
 ```bash
-cd /Users/batteryho/Documents/github/KIRA/KiraClaw/apps/desktop
+cd KiraClaw/apps/desktop
 npm install
 npm start
 ```
 
-The current desktop app is a thin local shell:
+The desktop app is the local control plane for:
 
 - runtime status
-- direct test runs against the daemon
-- settings for name, persona, channels, MCP, and workspace
+- direct test runs
+- identity and persona settings
+- channel settings
+- MCP settings
 - skills and schedules visibility
+- recent run logs
+
+---
+
+## Agentic Runtime Model
+
+KiraClaw no longer assumes that every run must directly produce a user-facing answer.
+
+### Runtime concepts
+
+- `adapter`: receives external input and publishes external output
+- `core agent`: thinks, decides, and uses tools
+- `speak`: explicit outward speech
+- `internal_summary`: internal run summary
+- `memory index`: stable metadata for memory lookup and updates
+
+### Memory model
+
+Memory now has two layers:
+
+- implicit runtime retrieval/save for normal runs
+- explicit tools for memory-aware work
+
+The intended explicit flow is:
+
+1. `memory_index_search`
+2. read or edit the actual memory files
+3. `memory_index_save`
+
+That keeps the index stable while still letting the agent manipulate the underlying memory files.
+
+### Channel behavior
+
+- direct replies to the current conversation should use `speak`
+- proactive delivery to another target should use explicit channel tools
+- shared-room runs can remain silent if speaking is not useful
+
+---
+
+## Features
+
+### Desktop
+
+- local runtime control
+- direct chat surface
+- settings for identity, persona, channels, workspace, and MCP
+- recent run logs with prompt, internal summary, spoken reply, and tool usage
+
+### Channels
+
+- Slack
+- Telegram
+
+### Local agent substrate
+
+- skills from `Filesystem Base Dir/skills`
+- local memory store and index
+- schedules for time-based automation
+- persistent run logs
+
+### Bridge release support
+
+- keeps `KIRA` app identity for migration releases
+- uses the existing update line for `KIRA-Slack -> KiraClaw`
+- keeps the bridge-specific release checklist separate from the core runtime design
+
+See [bridge-release-checklist.md](docs/bridge-release-checklist.md).
+
+---
+
+## Project Structure
+
+```text
+KiraClaw/
+  apps/
+    agentd/     # Local Python gateway
+    desktop/    # Electron desktop shell
+  defaults/
+    skills/     # Seed skills copied into new workspaces
+  docs/
+    architecture.md
+    bridge-release-checklist.md
+    migration-from-kira-slack.md
+    qa-benchmark.md
+  scripts/
+    verify_bridge_release.sh
+  pyproject.toml
+  package.json
+```
+
+---
+
+## Development
+
+### Test the Python side
+
+```bash
+cd KiraClaw
+uv run pytest
+```
+
+### Test the desktop side
+
+```bash
+cd KiraClaw/apps/desktop
+node --check renderer/app/*.mjs
+npm start
+```
+
+### Bridge verification
+
+```bash
+cd KiraClaw/apps/desktop
+npm run verify:bridge
+```
+
+---
+
+## Documentation
+
+- [architecture.md](docs/architecture.md)
+- [migration-from-kira-slack.md](docs/migration-from-kira-slack.md)
+- [bridge-release-checklist.md](docs/bridge-release-checklist.md)
+- [qa-benchmark.md](docs/qa-benchmark.md)
+- [desktop/README.md](apps/desktop/README.md)
+
+---
 
 ## Notes
 
-- The daemon is intentionally small.
-- The desktop app exists as a minimal shell today.
-- The current product shape is `Chat + Schedules`.
-- Group rooms rely on `speak` for outward replies instead of forcing every run to produce a visible answer.
-- Desktop direct runs expose both internal summaries and spoken replies when they exist.
-- Schedules are allowed to finish silently; outward delivery happens only when the agent actually uses `speak` or another explicit channel tool.
-- Run-level observability is persisted to `Filesystem Base Dir/logs/runs.jsonl`.
-- KIRA-Slack auto-update migration stays in the existing `KIRA-Slack` product line until a bridge release is ready.
+- KiraClaw is the active runtime line.
+- `KIRA-Slack` is now legacy and kept for bridge migration only.
+- The current product shape is intentionally small: `Chat + Schedules + Local Control Plane`.
+- The runtime should stay agentic without becoming structurally heavy.

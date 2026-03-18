@@ -171,7 +171,10 @@
     "updateReady": "Update Ready",
     "updateReadyMessage": "Version {{version}} has been downloaded.\nWould you like to restart now to apply the update?",
     "restartNow": "Restart Now",
-    "later": "Later"
+    "later": "Later",
+    "kiraClawMigrationTitle": "Install KiraClaw",
+    "kiraClawMigrationMessage": "KIRA-Slack no longer updates in place.\nPlease download and install the latest KiraClaw app from kira.krafton-ai.com.",
+    "downloadKiraClaw": "Download KiraClaw"
   },
   "language": {
     "label": "Language",

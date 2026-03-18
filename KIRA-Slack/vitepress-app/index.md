@@ -1,167 +1,80 @@
 ---
 layout: home
-title: KIRA - AI Virtual Coworker | Hire Your AI Assistant in 5 Minutes
-description: KIRA is an AI virtual coworker that works 24/7. Install a desktop app and get your own AI assistant integrated with Slack, Outlook, Confluence, Jira, and more. No coding required.
-head:
-  - - meta
-    - name: keywords
-      content: AI assistant, virtual coworker, Slack bot, AI agent, desktop app, productivity, automation, Claude AI, KRAFTON AI
-  - - meta
-    - property: og:title
-      content: KIRA - AI Virtual Coworker | Your 24/7 AI Assistant
-  - - meta
-    - property: og:description
-      content: Install a desktop app and hire your own AI virtual coworker. Works 24/7, integrates with Slack, Outlook, Confluence, and more.
-  - - meta
-    - property: og:url
-      content: https://kira.krafton-ai.com/
+title: KiraClaw
+description: Install KiraClaw, the local agentic desktop runtime for chat, channels, skills, schedules, and run logs.
 
 hero:
-  name: KIRA
-  text: Your AI Virtual Coworker
-  tagline: A 24/7 AI Agent Starting with Just a Desktop App
+  name: KiraClaw
+  text: Agentic Desktop Runtime
+  tagline: Local chat, Slack and Telegram channels, workspace skills, schedules, and run logs in one desktop app.
   image:
     src: /images/screenshots/hero-kira.png
-    alt: KIRA
+    alt: KiraClaw
   actions:
     - theme: brand
+      text: Download for macOS
+      link: https://kira.krafton-ai.com/kiraclaw-download/KiraClaw-0.1.57-arm64.dmg
+    - theme: alt
+      text: Download for Windows
+      link: https://kira.krafton-ai.com/kiraclaw-download/KiraClaw-0.1.57-x64.exe
+    - theme: alt
       text: GitHub
-      link: https://github.com/krafton-ai/kira
-    - theme: alt
-      text: macOS (Apple Silicon)
-      link: https://kira.krafton-ai.com/download/KIRA-0.1.7-arm64.dmg
-    - theme: alt
-      text: Windows
-      link: https://kira.krafton-ai.com/download/KIRA Setup 0.1.7.exe
+      link: https://github.com/krafton-ai/KIRA/tree/main/KiraClaw
 
 features:
-  - icon: 💬
-    title: Easy Conversations
-    details: Chat naturally anywhere—Slack DMs, channels, or threads. Just describe complex tasks in plain language.
-
   - icon: 🧠
-    title: Smart Memory
-    details: KIRA remembers conversations, project info, and important decisions. No need to repeat yourself.
+    title: Agentic Runtime
+    details: The local engine thinks first, uses tools explicitly, and speaks outward through `speak` instead of treating every run as a forced reply.
 
-  - icon: 📧
-    title: Automatic Email Processing
-    details: Monitors Outlook emails and automatically extracts assigned tasks to execute them directly.
+  - icon: 💬
+    title: Shared Core Across Surfaces
+    details: Talk, Slack, Telegram, schedules, memory, and skills all run on the same local daemon.
 
-  - icon: 📄
-    title: Document & Issue Tracking
-    details: Confluence updates are saved to memory, and assigned Jira tasks are executed automatically.
+  - icon: 🗂️
+    title: Workspace-First
+    details: Skills live in your workspace, run logs stay local, and memory stays under your filesystem base directory.
 
-  - icon: 🎯
-    title: Proactive Suggestions
-    details: KIRA analyzes memory to suggest necessary tasks in advance. Nothing gets missed.
+  - icon: 📅
+    title: Schedules
+    details: Time-based runs can think, act, speak, save memory, or finish silently when there is nothing useful to say.
 
-  - icon: 🎤
-    title: Voice Input
-    details: Chat via voice through the web interface. Great when typing isn't convenient.
-
-  - icon: ⚙️
-    title: Simple Setup
-    details: No coding or server configuration needed. Manage everything through an easy GUI.
+  - icon: 🔍
+    title: Run Logs
+    details: Inspect prompt, internal summary, spoken reply, and tool usage directly in the desktop app.
 
   - icon: 🔒
-    title: Privacy First
-    details: All data and memory stored locally — no third-party services involved. Your API key, your data, your control.
-
-  - icon: 🔑
-    title: Bring Your Own API Key
-    details: Transparent, pay-as-you-go costs with your own Claude API key — no subscriptions or hidden fees.
+    title: Local by Default
+    details: Settings, logs, and memory stay on your machine. KiraClaw is built as a local desktop control plane, not a hosted SaaS.
 ---
 
-## 💡 What is KIRA?
+## What changed?
 
-> **KIRA** = **K**RAFTON **I**NTELLIGENCE **R**OOKIE **A**GENT
+`KIRA-Slack` is now treated as the legacy line. New desktop runtime work moves to `KiraClaw`.
 
-KIRA is an open-source project that repackages **KRIS (KRAFTON Intelligence System)**—an AI agent system successfully used internally at KRAFTON—into a "virtual coworker" concept that anyone can install and use as a standalone desktop application. No servers, no cloud setup, just install and go.
+That means:
 
-### 🎬 Demo
+- direct manual installs should use `KiraClaw`
+- old `KIRA-Slack` installs should migrate forward
+- docs now describe the current runtime instead of the old Slack-first product
 
-<div style="display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin: 24px 0;">
-  <div style="text-align: center; flex: 0 0 calc(33.333% - 8px); min-width: 250px;">
-    <video src="https://kira.krafton-ai.com/videos/Search+PPTX_cut.mp4?v=2" width="100%" controls style="border-radius: 8px;"></video>
-    <p style="margin-top: 8px; font-size: 13px; color: #666;">Ask your virtual coworker to research and create a presentation</p>
-  </div>
-  <div style="text-align: center; flex: 0 0 calc(33.333% - 8px); min-width: 250px;">
-    <video src="https://kira.krafton-ai.com/videos/GitRepo+PDF_cut.mp4?v=2" width="100%" controls style="border-radius: 8px;"></video>
-    <p style="margin-top: 8px; font-size: 13px; color: #666;">Ask your virtual coworker to review code and summarize in a PDF</p>
-  </div>
-  <div style="text-align: center; flex: 0 0 calc(33.333% - 8px); min-width: 250px;">
-    <video src="https://kira.krafton-ai.com/videos/WebInterface+Wiki_cut.mp4?v=2" width="100%" controls style="border-radius: 8px;"></video>
-    <p style="margin-top: 8px; font-size: 13px; color: #666;">Talk to your virtual coworker by voice and have them update the wiki</p>
-  </div>
-  <div style="text-align: center; flex: 0 0 calc(33.333% - 8px); min-width: 250px;">
-    <video src="https://kira.krafton-ai.com/videos/Proactive+BotInThread_cut.mp4?v=2" width="100%" controls style="border-radius: 8px;"></video>
-    <p style="margin-top: 8px; font-size: 13px; color: #666;">Your virtual coworker proactively offers help based on past work</p>
-  </div>
-  <div style="text-align: center; flex: 0 0 calc(33.333% - 8px); min-width: 250px;">
-    <video src="https://kira.krafton-ai.com/videos/Outlook+Schedule_cut.mp4?v=2" width="100%" controls style="border-radius: 8px;"></video>
-    <p style="margin-top: 8px; font-size: 13px; color: #666;">Send an email to your virtual coworker to register a schedule</p>
-  </div>
-  <div style="text-align: center; flex: 0 0 calc(33.333% - 8px); min-width: 250px;">
-    <video src="https://kira.krafton-ai.com/videos/Proactive+TranslateFile_cut.mp4?v=2" width="100%" controls style="border-radius: 8px;"></video>
-    <p style="margin-top: 8px; font-size: 13px; color: #666;">Your virtual coworker proactively translates documents for you</p>
-  </div>
-</div>
+## What you get
 
-::: warning Beta Version
-KIRA is currently in beta. A few things to note:
-- **Response time**: Multiple agents collaborate to act like a virtual coworker, so responses may take a bit longer.
-- **Language support**: Both Korean and English are supported, but KIRA is optimized for Korean.
-:::
+KiraClaw currently includes:
 
----
+- `Talk` for direct local runs
+- Slack and Telegram channel adapters
+- workspace `skills/`
+- local memory with index tools
+- schedules for automation
+- run logs in the desktop UI
 
-## 🚀 Quick Start
+## Download
 
-Getting started with KIRA is really simple:
+- macOS (Apple Silicon): [KiraClaw-0.1.57-arm64.dmg](https://kira.krafton-ai.com/kiraclaw-download/KiraClaw-0.1.57-arm64.dmg)
+- Windows: [KiraClaw-0.1.57-x64.exe](https://kira.krafton-ai.com/kiraclaw-download/KiraClaw-0.1.57-x64.exe)
 
-1. **Download the app**: Download the installer for your platform (macOS or Windows)
-2. **Install**: Install it like any regular app
-3. **Connect Slack**: Open the app and just enter your Slack tokens!
+If macOS warns about the app on first launch, use the steps in [Troubleshooting](/troubleshooting).
 
-::: warning Claude Pro Plan Required
-KIRA uses Claude Code internally, which requires a **Claude Pro plan or higher**. [Learn more about Claude plans](https://www.anthropic.com/pricing)
-:::
+## Next step
 
-For more details, check out the [Getting Started guide](/getting-started).
-
----
-
-## 💡 Who is this for?
-
-KIRA is built for **non-developers**:
-
-- **Marketers**: Automate daily reports, manage social media
-- **Sales**: Extract email tasks, manage customer information
-- **Planners**: Track document updates, organize meeting notes
-- **Founders**: An AI assistant for all your work
-
-No technical knowledge required. It's as easy as installing Microsoft Office.
-
----
-
-## 🎯 Why KIRA?
-
-### 🔧 **No Setup Required**
-No servers, cloud configuration, or terminal commands needed. Install the app and complete all settings through the GUI.
-
-### 💰 **Reasonable Cost**
-Use your own Claude API key, so you only pay for what you use. No subscriptions or hidden fees.
-
-### 🔒 **Privacy First**
-All memory, logs, and settings stored locally on your machine. Direct communication with Claude API — no intermediary services. Your data never passes through third-party servers.
-
-### 🔌 **Rich Integrations**
-Connect directly with work tools like Slack, Outlook, Confluence, Jira, GitLab, X, and more.
-
----
-
-<div style="text-align: center; margin-top: 60px;">
-  <h2>Get Started Now</h2>
-  <p style="font-size: 18px;">Hire your own AI virtual coworker in just 15 minutes</p>
-  <a href="/getting-started" style="display: inline-block; margin-top: 20px; padding: 12px 32px; background: #3eaf7c; color: white; text-decoration: none; border-radius: 8px; font-weight: 600;">Get Started →</a>
-</div>
+Go to [Getting Started](/getting-started) for install, first launch, workspace setup, and channel setup.

@@ -22,8 +22,8 @@ export default {
 }
 
 function setupTracking() {
-  // Find all download links (dmg files)
-  document.querySelectorAll('a[href*=".dmg"]').forEach(link => {
+  // Find all download links
+  document.querySelectorAll('a[href*=".dmg"], a[href*=".zip"], a[href*=".exe"]').forEach(link => {
     // Avoid adding multiple listeners
     if (link.dataset.gaTracked) return
     link.dataset.gaTracked = 'true'

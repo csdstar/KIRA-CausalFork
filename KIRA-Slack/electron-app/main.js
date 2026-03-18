@@ -6,11 +6,10 @@
  * 2. Claude CLI discovery (including nvm)
  * 3. uv package manager installation
  * 4. IPC communication with renderer
- * 5. Auto-updater functionality
+ * 5. Migration prompt to KiraClaw
  */
 
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
-const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const { spawn, execSync } = require('child_process');
 const path = require('path');
@@ -104,6 +103,8 @@ const CONFIG_DIR = path.join(os.homedir(), '.kira');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.env');
 const LOG_FILE = path.join(CONFIG_DIR, 'server.log');
 const PID_FILE = path.join(CONFIG_DIR, 'server.pid');
+const MIGRATION_NOTICE_FILE = path.join(CONFIG_DIR, 'kiraclaw-migration-notice.json');
+const KIRACLAW_DOWNLOAD_PAGE = 'https://kira.krafton-ai.com/';
 
 // UV and npm paths are now provided by platform-utils
 const UV_POSSIBLE_PATHS = getUvPossiblePaths();
@@ -117,19 +118,7 @@ let mainWindow = null;
 let pythonProcess = null;
 
 // Configure logging
-autoUpdater.logger = log;
-autoUpdater.logger.transports.file.level = 'info';
-
-// Configure auto-updater for S3
-if (app.isPackaged) {
-  autoUpdater.setFeedURL({
-    provider: 's3',
-    bucket: 'kira-releases',
-    region: 'ap-northeast-2',
-    path: '/download'
-  });
-  log.info('Auto-updater configured for S3');
-}
+log.transports.file.level = 'info';
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -908,76 +897,65 @@ function registerIPCHandlers() {
 }
 
 // ============================================================================
-// AUTO-UPDATER EVENT HANDLERS
+// KIRACLAW MIGRATION NOTICE
 // ============================================================================
 
 /**
- * Handle auto-update events
+ * Check whether the one-time migration prompt should be shown for this app version
  */
-function setupAutoUpdater() {
-  // Checking for updates
-  autoUpdater.on('checking-for-update', () => {
-    log.info('Checking for updates...');
-  });
-
-  // Update available
-  autoUpdater.on('update-available', (info) => {
-    log.info('Update available:', info.version);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: t('dialogs.updateAvailable'),
-        message: t('dialogs.updateAvailableMessage', { version: info.version }),
-        buttons: [t('dialogs.ok')]
-      });
+function shouldShowKiraClawMigrationNotice() {
+  try {
+    if (!fs.existsSync(MIGRATION_NOTICE_FILE)) {
+      return true;
     }
-  });
+    const state = JSON.parse(fs.readFileSync(MIGRATION_NOTICE_FILE, 'utf8'));
+    return state.lastVersionShown !== app.getVersion();
+  } catch (error) {
+    log.warn('Failed to read KiraClaw migration notice state:', error);
+    return true;
+  }
+}
 
-  // No update available
-  autoUpdater.on('update-not-available', (info) => {
-    log.info('Using latest version:', info.version);
-  });
-
-  // Download in progress
-  autoUpdater.on('download-progress', (progressObj) => {
-    const logMessage = `Download speed: ${progressObj.bytesPerSecond} - ${progressObj.percent}% complete (${progressObj.transferred}/${progressObj.total})`;
-    log.info(logMessage);
-  });
-
-  // Download complete
-  autoUpdater.on('update-downloaded', (info) => {
-    log.info('Update downloaded:', info.version);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: t('dialogs.updateReady'),
-        message: t('dialogs.updateReadyMessage', { version: info.version }),
-        buttons: [t('dialogs.restartNow'), t('dialogs.later')],
-        defaultId: 0,
-        cancelId: 1
-      }).then((result) => {
-        if (result.response === 0) {
-          log.info('User chose to restart now');
-          // Stop server before installing update
-          if (isServerRunning()) {
-            stopServer();
-            setTimeout(() => {
-              autoUpdater.quitAndInstall(false, true);
-            }, 500);
-          } else {
-            autoUpdater.quitAndInstall(false, true);
-          }
-        } else {
-          log.info('User chose to update later');
-        }
-      });
+function markKiraClawMigrationNoticeShown() {
+  try {
+    if (!fs.existsSync(CONFIG_DIR)) {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true });
     }
-  });
+    fs.writeFileSync(
+      MIGRATION_NOTICE_FILE,
+      JSON.stringify(
+        {
+          lastVersionShown: app.getVersion(),
+          shownAt: new Date().toISOString()
+        },
+        null,
+        2
+      )
+    );
+  } catch (error) {
+    log.warn('Failed to persist KiraClaw migration notice state:', error);
+  }
+}
 
-  // Error handling
-  autoUpdater.on('error', (err) => {
-    log.error('Auto-update error:', err);
-    // Log error silently (don't interrupt user)
+function showKiraClawMigrationNotice() {
+  if (!mainWindow || mainWindow.isDestroyed() || !shouldShowKiraClawMigrationNotice()) {
+    return;
+  }
+
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: t('dialogs.kiraClawMigrationTitle'),
+    message: t('dialogs.kiraClawMigrationMessage'),
+    buttons: [t('dialogs.downloadKiraClaw'), t('dialogs.later')],
+    defaultId: 0,
+    cancelId: 1
+  }).then((result) => {
+    markKiraClawMigrationNoticeShown();
+    if (result.response === 0) {
+      shell.openExternal(KIRACLAW_DOWNLOAD_PAGE);
+    }
+  }).catch((error) => {
+    log.error('Failed to show KiraClaw migration notice:', error);
   });
 }
 
@@ -993,12 +971,10 @@ app.whenReady().then(() => {
   registerIPCHandlers();
   // 메뉴 완전 제거
   Menu.setApplicationMenu(null);
-  // Setup and check for updates
+  // KIRA-Slack is now legacy; point packaged users to manual KiraClaw installation
   if (app.isPackaged) {
-    setupAutoUpdater();
-    // Check for updates 5 seconds after app start (don't interrupt initial loading)
     setTimeout(() => {
-      autoUpdater.checkForUpdatesAndNotify();
+      showKiraClawMigrationNotice();
     }, 5000);
   }
 });

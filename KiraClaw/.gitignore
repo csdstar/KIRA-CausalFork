@@ -1,6 +1,7 @@
 .venv/
 node_modules/
 dist/
+dist-public/
 build/
 __pycache__/
 *.pyc

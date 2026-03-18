@@ -1,0 +1,38 @@
+{
+  "extends": "./electron-builder.bridge.json",
+  "appId": "com.krafton.kiraclaw",
+  "productName": "KiraClaw",
+  "artifactName": "${productName}-${version}-${arch}.${ext}",
+  "directories": {
+    "output": "dist-public"
+  },
+  "dmg": {
+    "title": "${productName} ${version}",
+    "contents": [
+      {
+        "x": 130,
+        "y": 220
+      },
+      {
+        "x": 410,
+        "y": 220,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "KiraClaw"
+  },
+  "publish": {
+    "provider": "s3",
+    "bucket": "kira-releases",
+    "region": "ap-northeast-2",
+    "path": "/kiraclaw-download",
+    "acl": "public-read"
+  }
+}

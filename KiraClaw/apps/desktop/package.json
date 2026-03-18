@@ -16,7 +16,14 @@
     "deploy:bridge:mac:skip-notarize": "electron-builder --mac --publish always --config electron-builder.bridge.skip-notarize.json",
     "deploy:bridge:win": "electron-builder --win --publish always --config electron-builder.bridge.json",
     "build:bridge:smoke": "electron-builder --mac --config electron-builder.bridge.smoke.json",
-    "build:bridge:smoke:dir": "electron-builder --dir --mac --config electron-builder.bridge.smoke.json"
+    "build:bridge:smoke:dir": "electron-builder --dir --mac --config electron-builder.bridge.smoke.json",
+    "build:public": "electron-builder --config electron-builder.public.json",
+    "build:public:mac": "electron-builder --mac --config electron-builder.public.json",
+    "build:public:win": "electron-builder --win --config electron-builder.public.json",
+    "deploy:public:mac": "electron-builder --mac --publish always --config electron-builder.public.json",
+    "deploy:public:mac:skip-notarize": "electron-builder --mac --publish always --config electron-builder.public.skip-notarize.json",
+    "deploy:public:win": "electron-builder --win --publish always --config electron-builder.public.json",
+    "build:public:smoke:dir": "electron-builder --dir --mac --config electron-builder.public.json"
   },
   "dependencies": {
     "electron-log": "^5.4.3",

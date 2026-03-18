@@ -38,14 +38,34 @@
 데스크톱 앱에서 다음을 확인하세요.
 
 - `Channels`
-- `Runs`
+- `Logs`
 
-runtime은 정상인데 바깥으로 말하지 않았다면, `Runs` 화면에서 다음을 보면 됩니다.
+runtime은 정상인데 바깥으로 말하지 않았다면, `Logs` 화면에서 다음을 보면 됩니다.
 
 - internal summary
 - spoken reply
 - tool usage
 - silent reason
+
+## OpenAI에서 tools 배열 에러가 나요
+
+OpenAI provider 사용 중 아래와 같은 에러가 보이면:
+
+- `Invalid 'tools': array too long`
+- `Expected an array with maximum length 128`
+
+현재 요청에 붙은 tool 수가 너무 많다는 뜻입니다.
+
+보통 여러 MCP 서버를 동시에 켰을 때 발생합니다.
+
+이렇게 해결하면 됩니다.
+
+1. `Settings > MCP` 열기
+2. 지금 당장 필요 없는 MCP 서버 몇 개 끄기
+3. 엔진 재시작
+4. 다시 실행
+
+tool을 많이 켠 상태를 유지하고 싶다면, 현재 OpenAI chat 경로보다 더 많은 tool을 잘 버티는 provider/model 조합을 사용하는 것도 방법입니다.
 
 ## 로컬 파일은 어디에 있나요?
 

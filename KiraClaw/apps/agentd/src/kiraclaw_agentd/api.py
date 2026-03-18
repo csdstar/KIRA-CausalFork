@@ -5,7 +5,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 import os
 import signal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from kiraclaw_agentd.channel_delivery import ChannelDelivery
@@ -203,18 +203,21 @@ def create_app() -> FastAPI:
             model=request.model,
             metadata={"source": "api"},
         )
+        if record is None:
+            raise HTTPException(status_code=500, detail="Run produced no record.")
         result: RunResult | None = record.result
-        return RunResponse(
-            run_id=record.run_id,
-            session_id=record.session_id,
-            state=record.state,
-            internal_summary=result.internal_summary if result else "",
-            final_response=result.final_response if result else "",
-            spoken_messages=result.spoken_messages if result else [],
-            streamed_text=result.streamed_text if result else "",
-            tool_events=result.tool_events if result else [],
-            error=record.error,
-        )
+        payload = {
+            "run_id": record.run_id,
+            "session_id": record.session_id,
+            "state": record.state,
+            "internal_summary": result.internal_summary if result else "",
+            "final_response": result.final_response if result else "",
+            "spoken_messages": list(result.spoken_messages) if result else [],
+            "streamed_text": result.streamed_text if result else "",
+            "tool_events": list(result.tool_events) if result else [],
+            "error": record.error,
+        }
+        return payload
 
     @app.get("/v1/run-logs")
     async def run_logs(limit: int = 50, session_id: str | None = None) -> dict:

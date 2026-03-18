@@ -38,7 +38,7 @@ Use manual migration instead:
 Check the desktop app:
 
 - `Channels`
-- `Runs`
+- `Logs`
 
 If the runtime is healthy but no outward reply appears, inspect:
 
@@ -47,7 +47,27 @@ If the runtime is healthy but no outward reply appears, inspect:
 - tool usage
 - silent reason
 
-from the `Runs` screen.
+from the `Logs` screen.
+
+## OpenAI fails with a tools array error
+
+If you use the OpenAI provider and see an error like:
+
+- `Invalid 'tools': array too long`
+- `Expected an array with maximum length 128`
+
+then too many tools are currently enabled for that model request.
+
+This usually happens when several MCP servers are enabled at the same time.
+
+Use one of these fixes:
+
+1. Open `Settings > MCP`
+2. Disable some MCP servers you do not need right now
+3. Restart the engine
+4. Try the run again
+
+If you want to keep a large tool surface enabled, use a provider/model combination that tolerates more tools better than the current OpenAI chat path.
 
 ## Where are my local files?
 

@@ -68,6 +68,16 @@ KiraClaw currently includes:
 - schedules for automation
 - run logs in the desktop UI
 
+## Demo
+
+| Search + PPTX | GitRepo + PDF | Web + Wiki |
+|:---:|:---:|:---:|
+| <video src="https://github.com/user-attachments/assets/284f9d0d-056c-42e9-8f1f-19873431ddba" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/721bc704-8b1a-4673-829a-52309ae69601" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/7329039a-fdad-4f4b-8f03-65402e4d6f6c" width="240" controls></video> |
+
+| Proactive + Thread | Email + Schedule | Proactive + Translate |
+|:---:|:---:|:---:|
+| <video src="https://github.com/user-attachments/assets/9ee1a520-507c-408a-a1d2-4a7a393385eb" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/79959017-67c2-4109-98bd-8c1dbba2b34f" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/c78768be-580e-42e8-a3d8-34eb5f0db6cb" width="240" controls></video> |
+
 ## Download
 
 - macOS (Apple Silicon): [Download KiraClaw for macOS](https://kira.krafton-ai.com/download/kiraclaw/KiraClaw-0.1.60-arm64.dmg)

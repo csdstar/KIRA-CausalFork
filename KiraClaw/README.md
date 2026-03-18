@@ -20,6 +20,18 @@ KiraClaw is the successor product line to `KIRA-Slack`. It keeps the local deskt
 
 ---
 
+## Demo
+
+| Search + PPTX | GitRepo + PDF | Web + Wiki |
+|:---:|:---:|:---:|
+| <video src="https://github.com/user-attachments/assets/284f9d0d-056c-42e9-8f1f-19873431ddba" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/721bc704-8b1a-4673-829a-52309ae69601" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/7329039a-fdad-4f4b-8f03-65402e4d6f6c" width="240" controls></video> |
+
+| Proactive + Thread | Email + Schedule | Proactive + Translate |
+|:---:|:---:|:---:|
+| <video src="https://github.com/user-attachments/assets/9ee1a520-507c-408a-a1d2-4a7a393385eb" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/79959017-67c2-4109-98bd-8c1dbba2b34f" width="240" controls></video> | <video src="https://github.com/user-attachments/assets/c78768be-580e-42e8-a3d8-34eb5f0db6cb" width="240" controls></video> |
+
+---
+
 ## What Is KiraClaw?
 
 KiraClaw is a local AI agent runtime that combines:
@@ -64,7 +76,7 @@ KiraClaw combines those lessons without dragging the old multi-agent Slack-first
 - `Channels`: Slack and Telegram on the same runtime
 - `Skills`: workspace skills loaded from `Filesystem Base Dir/skills`
 - `Schedules`: time-based automation runs
-- `Runs`: recent run logs, internal summaries, spoken replies, and tool usage
+- `Logs`: recent run logs, internal summaries, spoken replies, and tool usage
 
 ### Current runtime rules
 

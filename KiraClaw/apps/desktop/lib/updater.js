@@ -23,12 +23,7 @@ function setupAutoUpdater() {
 
   autoUpdater.logger = log;
   autoUpdater.logger.transports.file.level = "info";
-  autoUpdater.setFeedURL({
-    provider: "s3",
-    bucket: "kira-releases",
-    region: "ap-northeast-2",
-    path: "/download",
-  });
+  autoUpdater.logger.info(`Using packaged app-update.yml: ${updateConfigPath}`);
 
   autoUpdater.on("error", (error) => {
     log.error("Auto-update error:", error);

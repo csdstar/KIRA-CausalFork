@@ -25,7 +25,6 @@ Use this checklist before shipping the first `KIRA-Slack -> KiraClaw` bridge rel
 - desktop chat works
 - skills load from `Filesystem Base Dir/skills`
 - memory writes to `Filesystem Base Dir/memories`
-- watch state writes to `Filesystem Base Dir/watch_data`
 
 ## Build Verification
 

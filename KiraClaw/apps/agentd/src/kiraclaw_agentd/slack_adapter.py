@@ -11,10 +11,10 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
-from kiraclaw_agentd.bot_call_detector import BotCallDetector, matches_exact_name_at_start
 from kiraclaw_agentd.channel_debounce import KeyedDebouncer
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
+from kiraclaw_agentd.tool_event_summary import append_tool_summary
 
 logger = logging.getLogger(__name__)
 _APP_MENTION_RE = re.compile(r"<@[^>]+>")
@@ -57,17 +57,10 @@ def _is_authorized_user_name(user_name: str, allowed_names: str) -> bool:
     return False
 
 
-def _matches_exact_name_at_start(text: str, agent_name: str | None) -> bool:
-    return matches_exact_name_at_start(text, agent_name)
-
-
-def _clean_prompt_text(text: str, *, mention: bool, agent_name: str | None = None, direct_name_call: bool = False) -> str:
+def _clean_prompt_text(text: str, *, mention: bool, agent_name: str | None = None) -> str:
     if mention:
-        text = _APP_MENTION_RE.sub(" ", text)
-    elif direct_name_call:
-        from kiraclaw_agentd.bot_call_detector import strip_exact_name_at_start
-
-        text = strip_exact_name_at_start(text, agent_name)
+        replacement = f" {agent_name.strip()} " if agent_name and agent_name.strip() else " KiraClaw "
+        text = _APP_MENTION_RE.sub(replacement, text)
     return _normalize_text(text)
 
 
@@ -80,8 +73,9 @@ def _build_delivery_context_prefix(channel: str, thread_ts: str | None) -> str:
         lines.append(f"- thread_ts: {thread_ts}")
     lines.extend(
         [
-            "If you need to send a Slack message, reply, reaction, or file back into this same conversation,",
-            "use these exact identifiers with the Slack tools.",
+            "For an ordinary reply to this same conversation, prefer speak.",
+            "Use Slack tools only when you need a file upload, reaction, thread-specific control, or proactive delivery.",
+            "If you do need to use a Slack tool in this same conversation, use these exact identifiers.",
         ]
     )
     return "\n".join(lines)
@@ -115,7 +109,7 @@ def _session_id_from_event(event: dict[str, Any]) -> str:
     channel = event.get("channel", "unknown")
     if _is_dm(event):
         return f"slack:dm:{channel}"
-    thread = event.get("thread_ts") or event.get("ts") or "root"
+    thread = event.get("thread_ts") or "main"
     return f"slack:{channel}:{thread}"
 
 
@@ -125,16 +119,31 @@ def _reply_thread_ts_from_event(event: dict[str, Any]) -> str | None:
     return event.get("thread_ts") or event.get("ts")
 
 
-def _should_handle_message(event: dict[str, Any], agent_name: str | None = None) -> bool:
-    detector = BotCallDetector(agent_name)
-    decision = detector.detect_slack(
-        text=str(event.get("text", "")),
-        is_dm=_is_dm(event),
-        mention=False,
-        subtype=event.get("subtype"),
-        bot_id=event.get("bot_id"),
-    )
-    return decision.should_respond
+def _debounce_key_for_event(session_id: str, event: dict[str, Any], user: str) -> str:
+    if _is_dm(event):
+        return f"{session_id}:{user}"
+    return session_id
+
+
+def _merge_prompt_text(items: list[_BufferedSlackEvent]) -> str:
+    if not items:
+        return ""
+    if _is_dm(items[-1].event):
+        return "\n".join(item.prompt for item in items if item.prompt.strip())
+
+    lines = ["Recent room messages:"]
+    for item in items:
+        text = item.prompt.strip()
+        if not text:
+            continue
+        lines.append(f"- {item.user_name}: {text}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _is_human_message_event(event: dict[str, Any]) -> bool:
+    if event.get("subtype") or event.get("bot_id"):
+        return False
+    return bool(event.get("user"))
 
 
 class SlackGateway:
@@ -160,7 +169,6 @@ class SlackGateway:
             on_flush=self._flush_debounced_events,
             label="slack",
         )
-        self._bot_call_detector = BotCallDetector(settings.agent_name)
         if self.configured:
             self.state = "configured"
             self._ensure_app()
@@ -180,15 +188,22 @@ class SlackGateway:
 
         @self.app.event("app_mention")
         async def on_app_mention(event, client, logger):
+            if not _is_human_message_event(event):
+                return
             logger.info("Slack app mention received: channel=%s user=%s", event.get("channel"), event.get("user"))
             await self._schedule_event(event, client, logger, mention=True)
 
         @self.app.event("message")
         async def on_message(event, client, logger):
-            if not _should_handle_message(event, self.settings.agent_name):
+            if not _is_human_message_event(event):
                 return
             logger.info("Slack message received: channel=%s user=%s", event.get("channel"), event.get("user"))
-            await self._schedule_event(event, client, logger, mention=False)
+            await self._schedule_event(
+                event,
+                client,
+                logger,
+                mention=bool(_APP_MENTION_RE.search(str(event.get("text", "")))),
+            )
 
     def _ensure_app(self) -> None:
         if self.app is not None:
@@ -311,18 +326,10 @@ class SlackGateway:
         return user_id
 
     async def _schedule_event(self, event: dict[str, Any], client, logger, mention: bool) -> None:
+        if not _is_human_message_event(event):
+            return
         text = event.get("text", "").strip()
         if not text:
-            return
-        decision = self._bot_call_detector.detect_slack(
-            text=text,
-            is_dm=_is_dm(event),
-            mention=mention,
-            subtype=event.get("subtype"),
-            bot_id=event.get("bot_id"),
-        )
-        if not decision.should_respond:
-            logger.info("Ignoring Slack message without explicit bot call: channel=%s user=%s", event.get("channel"), event.get("user"))
             return
 
         session_id = _session_id_from_event(event)
@@ -337,7 +344,6 @@ class SlackGateway:
             text,
             mention=mention,
             agent_name=self.settings.agent_name,
-            direct_name_call=decision.direct_name_call,
         )
         if not cleaned_text:
             return
@@ -352,7 +358,7 @@ class SlackGateway:
         )
 
         await self._debouncer.enqueue(
-            f"{session_id}:{user}",
+            _debounce_key_for_event(session_id, event, user),
             _BufferedSlackEvent(
                 event=event,
                 session_id=session_id,
@@ -368,7 +374,7 @@ class SlackGateway:
 
     async def _flush_debounced_events(self, items: list[_BufferedSlackEvent]) -> None:
         last = items[-1]
-        merged_prompt = "\n".join(item.prompt for item in items if item.prompt.strip())
+        merged_prompt = _merge_prompt_text(items)
         excluded_timestamps = {
             str(item.event.get("ts"))
             for item in items
@@ -406,7 +412,7 @@ class SlackGateway:
             "thread_ts": reply_thread_ts,
             "user": user,
             "user_name": user_name,
-            "source": "slack-app-mention" if mention else "slack-dm",
+            "source": "slack-dm" if _is_dm(event) else "slack-group",
         }
         delivery_context = _build_delivery_context_prefix(channel, reply_thread_ts)
         context_prefix = delivery_context
@@ -428,9 +434,18 @@ class SlackGateway:
     async def _publish_result(self, client, channel: str, thread_ts: str | None, record: RunRecord) -> None:
         if record.state == "failed":
             text = f"Run failed.\n{record.error or 'Unknown error'}"
-        else:
-            text = (record.result.final_response if record.result else "") or "Run completed without a final response."
-        await client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
+            await client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
+            return
+
+        spoken_messages = list(record.result.spoken_messages) if record.result else []
+        if spoken_messages:
+            rendered_messages = list(spoken_messages)
+            rendered_messages[-1] = append_tool_summary(rendered_messages[-1], record.result.tool_events)
+            for text in rendered_messages:
+                await client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
+            return
+
+        return
 
     async def _build_slack_bootstrap_context(
         self,

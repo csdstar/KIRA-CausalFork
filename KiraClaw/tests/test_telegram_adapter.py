@@ -8,11 +8,10 @@ from kiraclaw_agentd.telegram_adapter import (
     _clean_prompt_text,
     _display_name,
     _is_authorized_user_name,
-    _matches_exact_name_at_start,
+    _is_human_message,
     _matchable_name,
     _reply_to_message_id,
     _session_id_from_message,
-    _should_handle_message,
 )
 
 
@@ -27,12 +26,11 @@ def test_matchable_name_includes_username_and_full_name() -> None:
 
 
 def test_telegram_prompt_cleanup_strips_bot_mention() -> None:
-    assert _clean_prompt_text("  @kira_bot   check   this  ", "kira_bot", mention=True) == "check this"
+    assert _clean_prompt_text("  @kira_bot   check   this  ", "kira_bot", mention=True, agent_name="세나") == "세나 check this"
     assert _clean_prompt_text("  hello   there ", "kira_bot", mention=False) == "hello there"
-    assert _clean_prompt_text("세나, check this", "kira_bot", mention=False, agent_name="세나", direct_name_call=True) == "check this"
 
 
-def test_telegram_message_filter_accepts_private_and_mentions() -> None:
+def test_is_human_message_filters_bot_messages() -> None:
     private = {
         "chat": {"id": 1, "type": "private"},
         "from": {"id": 10, "is_bot": False},
@@ -43,26 +41,15 @@ def test_telegram_message_filter_accepts_private_and_mentions() -> None:
         "from": {"id": 10, "is_bot": False},
         "text": "@kira_bot hello",
     }
-    reply = {
+    bot_message = {
         "chat": {"id": -1, "type": "group"},
-        "from": {"id": 10, "is_bot": False},
-        "text": "follow up",
-        "reply_to_message": {"from": {"id": 999}},
+        "from": {"id": 10, "is_bot": True},
+        "text": "hello",
     }
 
-    assert _should_handle_message(private, "kira_bot", 999, "세나") is True
-    assert _should_handle_message(group, "kira_bot", 999, "세나") is True
-    assert _should_handle_message(reply, "kira_bot", 999, "세나") is True
-    assert _should_handle_message({"chat": {"type": "group"}, "from": {"is_bot": False}, "text": "세나 hello"}, "kira_bot", 999, "세나") is True
-    assert _should_handle_message({"chat": {"type": "group"}, "from": {"is_bot": False}, "text": "세나야 hello"}, "kira_bot", 999, "세나") is False
-    assert _should_handle_message({"chat": {"type": "group"}, "from": {"is_bot": False}, "text": "hello"}, "kira_bot", 999, "세나") is False
-
-
-def test_telegram_exact_name_match_is_strict() -> None:
-    assert _matches_exact_name_at_start("세나 hello", "세나") is True
-    assert _matches_exact_name_at_start("세나, hello", "세나") is True
-    assert _matches_exact_name_at_start("세나야 hello", "세나") is False
-    assert _matches_exact_name_at_start("hello 세나", "세나") is False
+    assert _is_human_message(private) is True
+    assert _is_human_message(group) is True
+    assert _is_human_message(bot_message) is False
 
 
 def test_telegram_message_sessions_and_reply_targets() -> None:
@@ -105,7 +92,7 @@ class _FakeSessionManager:
             prompt=kwargs["prompt"],
             created_at="2026-01-01T00:00:00Z",
             finished_at="2026-01-01T00:00:01Z",
-            result=RunResult(final_response="telegram ok", streamed_text="telegram ok"),
+            result=RunResult(final_response="internal telegram ok", streamed_text="telegram ok", spoken_messages=["telegram ok"]),
             metadata=kwargs.get("metadata", {}),
         )
 
@@ -243,7 +230,7 @@ def test_telegram_messages_from_same_user_are_debounced_and_merged(tmp_path) -> 
     asyncio.run(scenario())
 
 
-def test_telegram_group_exact_name_call_is_accepted_and_cleaned(tmp_path) -> None:
+def test_telegram_group_messages_are_handled_as_room_transcript_without_direct_call_gate(tmp_path) -> None:
     async def scenario() -> None:
         settings = KiraClawSettings(
             data_dir=tmp_path / "data",
@@ -253,7 +240,21 @@ def test_telegram_group_exact_name_call_is_accepted_and_cleaned(tmp_path) -> Non
             telegram_enabled=False,
             agent_name="세나",
         )
-        session_manager = _FakeSessionManager()
+        class _SilentGroupSessionManager(_FakeSessionManager):
+            async def run(self, **kwargs) -> RunRecord:
+                self.calls.append(kwargs)
+                return RunRecord(
+                    run_id="run-1",
+                    session_id=kwargs["session_id"],
+                    state="completed",
+                    prompt=kwargs["prompt"],
+                    created_at="2026-01-01T00:00:00Z",
+                    finished_at="2026-01-01T00:00:01Z",
+                    result=RunResult(final_response="internal only", streamed_text=""),
+                    metadata=kwargs.get("metadata", {}),
+                )
+
+        session_manager = _SilentGroupSessionManager()
         gateway = TelegramGateway(session_manager, settings, debounce_seconds=0.05)
         sent: list[dict] = []
 
@@ -273,15 +274,264 @@ def test_telegram_group_exact_name_call_is_accepted_and_cleaned(tmp_path) -> Non
             "chat": {"id": -100, "type": "group"},
             "from": {"id": 10, "username": "batteryho", "first_name": "지호", "last_name": "전", "is_bot": False},
             "message_id": 52,
-            "text": "세나, 상태 알려줘",
+            "text": "상태 알려줘",
         }
 
-        assert _should_handle_message(message, "jiho_kira_bot", 999, "세나") is True
         await gateway._handle_message(message)
         await asyncio.sleep(0.12)
 
         assert len(session_manager.calls) == 1
-        assert session_manager.calls[0]["prompt"] == "상태 알려줘"
-        assert sent == [{"chat_id": -100, "text": "telegram ok", "reply_to_message_id": 52}]
+        assert session_manager.calls[0]["prompt"] == "Recent room messages:\n- @batteryho: 상태 알려줘"
+        assert sent == []
+
+    asyncio.run(scenario())
+
+
+def test_telegram_group_messages_share_one_room_debounce_window(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            telegram_enabled=False,
+            agent_name="세나",
+        )
+        class _SilentGroupSessionManager(_FakeSessionManager):
+            async def run(self, **kwargs) -> RunRecord:
+                self.calls.append(kwargs)
+                return RunRecord(
+                    run_id="run-1",
+                    session_id=kwargs["session_id"],
+                    state="completed",
+                    prompt=kwargs["prompt"],
+                    created_at="2026-01-01T00:00:00Z",
+                    finished_at="2026-01-01T00:00:01Z",
+                    result=RunResult(final_response="internal only", streamed_text=""),
+                    metadata=kwargs.get("metadata", {}),
+                )
+
+        session_manager = _SilentGroupSessionManager()
+        gateway = TelegramGateway(session_manager, settings, debounce_seconds=0.05)
+        sent: list[dict] = []
+
+        async def fake_send(chat_id, text, reply_to_message_id=None):
+            sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_to_message_id": reply_to_message_id,
+                }
+            )
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+        gateway.identity = {"id": 999, "username": "jiho_kira_bot", "first_name": "지호봇"}
+
+        message1 = {
+            "chat": {"id": -100, "type": "group"},
+            "from": {"id": 10, "username": "batteryho", "first_name": "지호", "last_name": "전", "is_bot": False},
+            "message_id": 52,
+            "text": "첫번째",
+        }
+        message2 = {
+            "chat": {"id": -100, "type": "group"},
+            "from": {"id": 11, "username": "alice", "first_name": "Alice", "is_bot": False},
+            "message_id": 53,
+            "text": "두번째",
+        }
+
+        await gateway._handle_message(message1)
+        await gateway._handle_message(message2)
+        await asyncio.sleep(0.12)
+
+        assert len(session_manager.calls) == 1
+        assert session_manager.calls[0]["prompt"] == (
+            "Recent room messages:\n"
+            "- @batteryho: 첫번째\n"
+            "- @alice: 두번째"
+        )
+        assert sent == []
+
+    asyncio.run(scenario())
+
+
+def test_telegram_publish_result_prefers_spoken_messages(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            telegram_enabled=False,
+        )
+        session_manager = _FakeSessionManager()
+        gateway = TelegramGateway(session_manager, settings)
+        sent: list[dict] = []
+
+        async def fake_send(chat_id, text, reply_to_message_id=None):
+            sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_to_message_id": reply_to_message_id,
+                }
+            )
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+        record = RunRecord(
+            run_id="run-1",
+            session_id="telegram:-1:main",
+            state="completed",
+            prompt="hello",
+            created_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            result=RunResult(
+                final_response="internal summary",
+                streamed_text="",
+                spoken_messages=["첫번째 말", "두번째 말"],
+            ),
+        )
+
+        await gateway._publish_result(-1, 77, record)
+
+        assert sent == [
+            {"chat_id": -1, "text": "첫번째 말", "reply_to_message_id": 77},
+            {"chat_id": -1, "text": "두번째 말", "reply_to_message_id": 77},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_telegram_publish_result_appends_tool_summary_to_last_spoken_message(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            telegram_enabled=False,
+        )
+        session_manager = _FakeSessionManager()
+        gateway = TelegramGateway(session_manager, settings)
+        sent: list[dict] = []
+
+        async def fake_send(chat_id, text, reply_to_message_id=None):
+            sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_to_message_id": reply_to_message_id,
+                }
+            )
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+        record = RunRecord(
+            run_id="run-1",
+            session_id="telegram:-1:main",
+            state="completed",
+            prompt="hello",
+            created_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            result=RunResult(
+                final_response="internal summary",
+                streamed_text="",
+                tool_events=[
+                    {"phase": "start", "name": "read", "args": {}},
+                    {"phase": "end", "name": "read", "result": "ok"},
+                    {"phase": "start", "name": "bash", "args": {}},
+                    {"phase": "end", "name": "bash", "result": "ok"},
+                ],
+                spoken_messages=["첫번째 말", "두번째 말"],
+            ),
+        )
+
+        await gateway._publish_result(-1, 77, record)
+
+        assert sent == [
+            {"chat_id": -1, "text": "첫번째 말", "reply_to_message_id": 77},
+            {"chat_id": -1, "text": "두번째 말\n\nUsed: read, bash", "reply_to_message_id": 77},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_telegram_group_publish_is_silent_without_speak(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            telegram_enabled=False,
+        )
+        session_manager = _FakeSessionManager()
+        gateway = TelegramGateway(session_manager, settings)
+        sent: list[dict] = []
+
+        async def fake_send(chat_id, text, reply_to_message_id=None):
+            sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_to_message_id": reply_to_message_id,
+                }
+            )
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+        record = RunRecord(
+            run_id="run-1",
+            session_id="telegram:-1:main",
+            state="completed",
+            prompt="hello",
+            created_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            result=RunResult(final_response="internal summary", streamed_text=""),
+            metadata={"source": "telegram-group"},
+        )
+
+        await gateway._publish_result(-1, 77, record)
+
+        assert sent == []
+
+    asyncio.run(scenario())
+
+
+def test_telegram_dm_publish_is_silent_without_speak(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            telegram_enabled=False,
+        )
+        session_manager = _FakeSessionManager()
+        gateway = TelegramGateway(session_manager, settings)
+        sent: list[dict] = []
+
+        async def fake_send(chat_id, text, reply_to_message_id=None):
+            sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_to_message_id": reply_to_message_id,
+                }
+            )
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+        record = RunRecord(
+            run_id="run-1",
+            session_id="telegram:dm:123",
+            state="completed",
+            prompt="hello",
+            created_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            result=RunResult(final_response="internal summary", streamed_text=""),
+            metadata={"source": "telegram-dm"},
+        )
+
+        await gateway._publish_result(123, None, record)
+
+        assert sent == []
 
     asyncio.run(scenario())

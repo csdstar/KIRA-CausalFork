@@ -109,6 +109,7 @@ function runtimeValueForField(state, field) {
 
   const runtimeMap = {
     KIRACLAW_AGENT_NAME: state.runtime.agent_name,
+    KIRACLAW_AGENT_PERSONA: state.runtime.agent_persona,
     KIRACLAW_PROVIDER: state.runtime.provider,
     KIRACLAW_MODEL: state.runtime.model,
     SLACK_ENABLED: String(Boolean(state.runtime.slack_enabled)),

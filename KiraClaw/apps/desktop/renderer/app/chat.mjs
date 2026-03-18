@@ -3,7 +3,7 @@ import { getAgentName } from "./branding.mjs";
 import { byId, escapeHtml } from "./dom.mjs";
 
 let chatBusy = false;
-const FILE_PATH_PATTERN = /(\/(?:Users|tmp|private|var|Volumes|opt|Applications|Library)[^\s<>"']*)/g;
+const FILE_PATH_PATTERN = /(~[\\/][^\s<>"']*|[A-Za-z]:[\\/][^\s<>"']*|\/(?:Users|tmp|private|var|Volumes|opt|Applications|Library)[^\s<>"']*)/g;
 
 export function clearChatThread(state) {
   const agentName = getAgentName(state);
@@ -77,6 +77,20 @@ function summarizeToolEvents(toolEvents) {
   }
 
   return `Used: ${[...counts.entries()].map(([name, count]) => count > 1 ? `${name} x${count}` : name).join(", ")}`;
+}
+
+function buildChatMeta(toolEvents, extraParts = []) {
+  const parts = [];
+  const toolSummary = summarizeToolEvents(toolEvents);
+  if (toolSummary) {
+    parts.push(toolSummary);
+  }
+  for (const part of extraParts) {
+    if (part) {
+      parts.push(part);
+    }
+  }
+  return parts.join(" • ");
 }
 
 function renderTerminalText(text) {
@@ -166,11 +180,21 @@ async function sendChat({ api, state, onAfterSend }) {
       pendingMessage,
       state,
       "assistant",
-      result.final_response || "(empty response)",
+      result.internal_summary || result.final_response || "(empty internal summary)",
       {
-        meta: summarizeToolEvents(result.tool_events),
+        meta: buildChatMeta(result.tool_events, ["Internal summary"]),
       },
     );
+    if (Array.isArray(result.spoken_messages) && result.spoken_messages.length > 0) {
+      appendChatMessage(
+        state,
+        "assistant",
+        result.spoken_messages.join("\n\n"),
+        {
+          meta: "Spoken reply",
+        },
+      );
+    }
     await onAfterSend();
   } catch (error) {
     replaceChatMessage(pendingMessage, state, "assistant", `Run failed: ${error.message}`);

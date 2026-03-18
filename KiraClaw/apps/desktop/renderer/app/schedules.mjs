@@ -68,12 +68,12 @@ export function renderSchedulesState(state) {
 
   list.innerHTML = state.schedules.map((schedule) => `
     <article class="simple-item">
-      <div class="watch-card-head">
+      <div class="schedule-card-head">
         <strong>${escapeHtml(String(schedule.name || schedule.id || "Schedule"))}</strong>
         <span class="status-chip ${schedule.is_enabled !== false ? "online" : "offline"}">${schedule.is_enabled !== false ? "Enabled" : "Disabled"}</span>
       </div>
       <p>${escapeHtml(summarizePrompt(schedule.text || ""))}</p>
-      <p class="watch-card-meta">${escapeHtml(summarizeSchedule(schedule))}${scheduleMeta(schedule) ? ` · ${escapeHtml(scheduleMeta(schedule))}` : ""}</p>
+      <p class="schedule-card-meta">${escapeHtml(summarizeSchedule(schedule))}${scheduleMeta(schedule) ? ` · ${escapeHtml(scheduleMeta(schedule))}` : ""}</p>
     </article>
   `).join("");
 

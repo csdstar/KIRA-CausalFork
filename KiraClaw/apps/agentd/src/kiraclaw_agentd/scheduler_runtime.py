@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -29,9 +28,7 @@ class SchedulerRuntime:
         self.scheduler = AsyncIOScheduler(job_defaults={"coalesce": False, "max_instances": 1, "misfire_grace_time": 30})
         self.state: str = "disabled"
         self.last_error: str | None = None
-        self._watch_task: asyncio.Task[None] | None = None
         self._known_mtime: float | None = None
-        self._watch_interval_seconds = 1.0
 
     @property
     def enabled(self) -> bool:
@@ -50,30 +47,11 @@ class SchedulerRuntime:
         await self.reload_from_file(force=True)
         self.scheduler.start()
         self.state = "running"
-        self._watch_task = asyncio.create_task(self._watch_loop(), name="kiraclaw-scheduler-watch")
 
     async def stop(self) -> None:
-        if self._watch_task:
-            self._watch_task.cancel()
-            try:
-                await self._watch_task
-            except asyncio.CancelledError:
-                pass
-            self._watch_task = None
-
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         self.state = "disabled" if not self.enabled else "configured"
-
-    async def _watch_loop(self) -> None:
-        while True:
-            await asyncio.sleep(self._watch_interval_seconds)
-            try:
-                await self.reload_from_file()
-            except Exception as exc:
-                self.last_error = str(exc)
-                self.state = "failed"
-                logger.exception("Failed to reload schedules")
 
     async def reload_from_file(self, *, force: bool = False) -> None:
         if not self.enabled:
@@ -131,6 +109,7 @@ class SchedulerRuntime:
         record = await self.session_manager.run(
             session_id=f"schedule:{schedule_id}",
             prompt=prompt,
+            context_prefix=self._schedule_context_prefix(channel_type, channel_target),
             metadata={
                 "source": "scheduler",
                 "channel_type": channel_type,
@@ -142,11 +121,29 @@ class SchedulerRuntime:
         )
 
         if channel_target:
-            await self.channel_delivery.send_text(channel_type, channel_target, self._result_text(record))
+            result_text = self._result_text(record)
+            if result_text:
+                await self.channel_delivery.send_text(channel_type, channel_target, result_text)
 
     def _result_text(self, record: RunRecord) -> str:
         if record.state == "failed":
             return f"Scheduled run failed.\n{record.error or 'Unknown error'}"
-        if record.result and record.result.final_response:
-            return record.result.final_response
-        return "Scheduled run completed without a final response."
+        if record.result:
+            public_response = getattr(record.result, "public_response_text", "")
+            if public_response:
+                return public_response
+        return ""
+
+    def _schedule_context_prefix(self, channel_type: str, channel_target: str) -> str:
+        target_type = str(channel_type or "slack").strip() or "slack"
+        target_value = str(channel_target or "").strip()
+        if target_value:
+            return (
+                "This is a scheduled automation run.\n"
+                f"If you use speak, your outward words will be delivered to {target_type}:{target_value}.\n"
+                "If no outward delivery is useful, stay silent and finish the run without speak."
+            )
+        return (
+            "This is a scheduled automation run with no automatic outward delivery target.\n"
+            "Think and act first. Stay silent unless you deliberately use tools to send something elsewhere."
+        )

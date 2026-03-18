@@ -15,10 +15,8 @@ export const state = {
   schedules: [],
   scheduleFile: "",
   scheduleError: "",
-  watches: [],
-  watchDraft: false,
-  watchDirty: false,
-  watchRuns: [],
-  selectedWatchId: null,
+  runLogs: [],
+  runLogFile: "",
+  runLogError: "",
   settingsDirty: false,
 };

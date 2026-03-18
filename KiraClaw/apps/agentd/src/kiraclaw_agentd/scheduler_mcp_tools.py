@@ -7,12 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 from apscheduler.triggers.cron import CronTrigger
 
 from kiraclaw_agentd.mcp_stdio import McpToolSpec, mcp_text_result
 from kiraclaw_agentd.schedule_store import read_schedules, write_schedules
 
 _schedule_file_lock = asyncio.Lock()
+_scheduler_reload_timeout = aiohttp.ClientTimeout(total=2.0)
 
 
 def _schedule_file() -> Path:
@@ -44,6 +46,24 @@ def _validate_schedule_value(schedule_type: str, schedule_value: str) -> str | N
         return None
 
     return "Invalid schedule_type. Only 'cron' or 'date' can be used."
+
+
+def _scheduler_reload_url() -> str:
+    host = os.environ.get("KIRACLAW_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = os.environ.get("KIRACLAW_PORT", "8787").strip() or "8787"
+    return f"http://{host}:{port}/v1/admin/reload-schedules"
+
+
+async def _notify_scheduler_reload() -> tuple[bool, str | None]:
+    try:
+        async with aiohttp.ClientSession(timeout=_scheduler_reload_timeout) as session:
+            async with session.post(_scheduler_reload_url()) as response:
+                if response.status >= 400:
+                    body = await response.text()
+                    return False, f"Scheduler reload failed with HTTP {response.status}: {body.strip()}"
+                return True, None
+    except Exception as exc:
+        return False, str(exc)
 
 
 async def add_schedule(args: dict[str, Any]) -> dict[str, Any]:
@@ -81,11 +101,17 @@ async def add_schedule(args: dict[str, Any]) -> dict[str, Any]:
         schedules.append(new_schedule)
         write_schedules(schedule_file, schedules)
 
+    reload_notified, reload_error = await _notify_scheduler_reload()
+    message = f"Successfully added schedule: {new_schedule['name']}"
+    if not reload_notified and reload_error:
+        message = f"{message} (reload pending: {reload_error})"
+
     return mcp_text_result(
         {
             "success": True,
-            "message": f"Successfully added schedule: {new_schedule['name']}",
+            "message": message,
             "schedule_id": new_schedule["id"],
+            "reload_notified": reload_notified,
         }
     )
 
@@ -107,10 +133,16 @@ async def remove_schedule(args: dict[str, Any]) -> dict[str, Any]:
 
         write_schedules(schedule_file, updated)
 
+    reload_notified, reload_error = await _notify_scheduler_reload()
+    message = f"Deleted schedule with ID {args['schedule_id']}."
+    if not reload_notified and reload_error:
+        message = f"{message} (reload pending: {reload_error})"
+
     return mcp_text_result(
         {
             "success": True,
-            "message": f"Deleted schedule with ID {args['schedule_id']}.",
+            "message": message,
+            "reload_notified": reload_notified,
         }
     )
 
@@ -188,10 +220,16 @@ async def update_schedule(args: dict[str, Any]) -> dict[str, Any]:
 
         write_schedules(schedule_file, schedules)
 
+    reload_notified, reload_error = await _notify_scheduler_reload()
+    message = f"Updated schedule with ID {args['schedule_id']}."
+    if not reload_notified and reload_error:
+        message = f"{message} (reload pending: {reload_error})"
+
     return mcp_text_result(
         {
             "success": True,
-            "message": f"Updated schedule with ID {args['schedule_id']}.",
+            "message": message,
+            "reload_notified": reload_notified,
         }
     )
 

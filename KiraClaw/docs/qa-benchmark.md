@@ -16,6 +16,7 @@ It focuses on observable behavior, not implementation details.
 - No silent hangs longer than expected startup/tool latency.
 - Generated files are accessible from the desktop app or attached back to the channel when supported.
 - Multi-turn context works within the same session/thread/chat.
+- Recent runs remain inspectable in `Filesystem Base Dir/logs/runs.jsonl` or through `GET /v1/run-logs`.
 
 ## 1. Desktop shell
 
@@ -37,12 +38,24 @@ Failure signs:
 ### 1.2 Navigation
 
 Action:
-- Visit `Talk`, `Channels`, `MCP`, `Skills`, `Schedules`, `Watches`, `Settings`.
+- Visit `Talk`, `Channels`, `MCP`, `Skills`, `Schedules`, `Settings`.
 
 Expected:
 - Each tab renders without layout breakage.
 - Titles match sidebar labels.
 - No input fields reset while typing.
+
+### 1.3 Identity and persona
+
+Action:
+- Open `Settings > Identity`.
+- Set a non-default name and a short persona paragraph.
+- Save settings and restart the engine.
+
+Expected:
+- The configured name appears in the app chrome where identity is shown.
+- The persona text persists after reload.
+- The engine restarts cleanly with the updated identity state.
 
 ## 2. Talk
 
@@ -54,6 +67,8 @@ Prompt:
 Expected:
 - A normal reply returns.
 - Tool trace appears when tools are used.
+- `Talk` shows an internal summary block.
+- If `speak` was used, a separate spoken reply block also appears.
 
 ### 2.2 Multi-turn
 
@@ -72,11 +87,21 @@ Prompt:
 Expected:
 - Reply includes an absolute path.
 - The path is clickable in `Talk`.
-- Clicking it reveals the file in Finder.
+- Clicking it reveals the file in the platform file browser.
 
 Failure signs:
 - Path is plain text only.
 - Clicking does nothing or opens the wrong folder.
+
+### 2.4 Run observability
+
+Action:
+- Trigger one successful run and one run that stays silent without `speak`.
+- Inspect `GET /v1/run-logs`.
+
+Expected:
+- Each run records the prompt, internal summary, spoken messages, and tool events.
+- Silent runs show a `silent_reason` instead of looking like missing data.
 
 ## 3. Slack
 
@@ -87,6 +112,7 @@ Prompt:
 
 Expected:
 - Bot replies in the same DM.
+- In shared rooms, silence is valid unless a reply was clearly expected.
 
 ### 3.2 Multi-turn in DM or thread
 
@@ -119,6 +145,16 @@ Expected:
 - No reply.
 - No visible side effects.
 
+### 3.5 Shared room silence
+
+Prompt:
+- In a shared Slack room, post normal room chatter without explicitly calling the agent by name.
+
+Expected:
+- A run may still happen internally.
+- No outward Slack message is required unless the agent decided to `speak`.
+- Silent completion is valid.
+
 ## 4. Telegram
 
 ### 4.1 DM response
@@ -149,6 +185,14 @@ Action:
 Expected:
 - No reply.
 
+### 4.4 Shared room silence
+
+Prompt:
+- In a Telegram group, send ordinary room chatter without explicitly calling the agent by name.
+
+Expected:
+- Silent completion is valid if the agent did not `speak`.
+
 ## 5. Skills
 
 ### 5.1 Discovery
@@ -167,6 +211,17 @@ Prompt:
 Expected:
 - A new skill folder is created under `Filesystem Base Dir/skills`.
 - The new skill appears in the `Skills` tab after refresh or next run.
+
+### 6.2 Memory index flow
+
+Prompt sequence:
+1. `우리 팀 색상 규칙은 navy와 white야. 기억해줘`
+2. `내 메모리 인덱스에서 팀 색상 규칙 관련 항목 찾아줘`
+
+Expected:
+- The first run can use `memory_save` or explicit memory file work.
+- The second run prefers the memory index path instead of manually browsing raw files first.
+- If the agent edits a memory file directly, the index is updated afterward.
 
 ## 6. Memory
 
@@ -196,28 +251,7 @@ Expected:
 - UI matches the underlying schedule count.
 - Broken or empty state is surfaced clearly.
 
-## 8. Watches
-
-### 8.1 Create and run
-
-Action:
-- Create a watch with:
-  - Every N Minutes: `30`
-  - Condition: `현재 시간을 확인한다`
-  - Action: `아무것도 하지 말고 짧게 요약한다`
-- Save.
-- Run now.
-
-Expected:
-- Watch saves successfully.
-- Run history records the execution.
-
-### 8.2 Isolation
-
-Expected:
-- Watch runs do not pollute chat memory.
-
-## 9. MCP
+## 8. MCP
 
 ### 9.1 Time MCP
 
@@ -237,12 +271,13 @@ Expected:
 - If browser setup is ready, the run completes.
 - If not ready, failure is explicit rather than hanging forever.
 
-## 10. Known weak points to watch
+## 9. Known weak points
 
 - Engine startup latency can be high when many MCP servers are enabled.
 - Custom remote MCP failures should not break the rest of the runtime.
 - File-return behavior should be checked separately for Slack and Telegram.
 - Desktop still lacks full automated e2e coverage.
+- Shared-room behavior is more agentic now, so a run without `speak` can correctly result in no outward reply.
 
 ## Suggested QA outcome labels
 

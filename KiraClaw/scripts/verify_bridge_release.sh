@@ -41,7 +41,13 @@ echo "[bridge] running desktop syntax checks"
 node --check "$DESKTOP_DIR/main.js"
 node --check "$DESKTOP_DIR/preload.js"
 node --check "$DESKTOP_DIR/renderer/app/index.mjs"
+node --check "$DESKTOP_DIR/renderer/app/chat.mjs"
+node --check "$DESKTOP_DIR/renderer/app/home.mjs"
+node --check "$DESKTOP_DIR/renderer/app/logs.mjs"
+node --check "$DESKTOP_DIR/renderer/app/schedules.mjs"
+node --check "$DESKTOP_DIR/renderer/app/settings.mjs"
 node --check "$DESKTOP_DIR/renderer/app/skills.mjs"
+node --check "$DESKTOP_DIR/renderer/app/state.mjs"
 
 echo "[bridge] running KiraClaw test suite"
 "$ROOT_DIR/.venv/bin/python" -m pytest -q

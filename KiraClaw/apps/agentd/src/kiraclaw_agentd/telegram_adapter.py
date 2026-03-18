@@ -9,10 +9,10 @@ from typing import Any
 
 import aiohttp
 
-from kiraclaw_agentd.bot_call_detector import BotCallDetector, matches_exact_name_at_start
 from kiraclaw_agentd.channel_debounce import KeyedDebouncer
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
+from kiraclaw_agentd.tool_event_summary import append_tool_summary
 
 logger = logging.getLogger(__name__)
 _CHANNEL_DEBOUNCE_SECONDS = 5.0
@@ -78,10 +78,6 @@ def _display_name(user: dict[str, Any]) -> str:
     return full or str(user.get("id") or "Telegram")
 
 
-def _matches_exact_name_at_start(text: str, agent_name: str | None) -> bool:
-    return matches_exact_name_at_start(text, agent_name)
-
-
 def _is_private_chat(message: dict[str, Any]) -> bool:
     return str(message.get("chat", {}).get("type", "")) == "private"
 
@@ -92,14 +88,10 @@ def _clean_prompt_text(
     *,
     mention: bool,
     agent_name: str | None = None,
-    direct_name_call: bool = False,
 ) -> str:
     if mention and bot_username:
-        text = re.sub(fr"@{re.escape(bot_username)}\b", " ", text, flags=re.IGNORECASE)
-    elif direct_name_call:
-        from kiraclaw_agentd.bot_call_detector import strip_exact_name_at_start
-
-        text = strip_exact_name_at_start(text, agent_name)
+        replacement = agent_name.strip() if agent_name and agent_name.strip() else f"@{bot_username}"
+        text = re.sub(fr"@{re.escape(bot_username)}\b", replacement, text, flags=re.IGNORECASE)
     return _normalize_text(text)
 
 
@@ -112,8 +104,9 @@ def _build_delivery_context_prefix(chat_id: int | str, reply_to_message_id: int 
         lines.append(f"- reply_to_message_id: {reply_to_message_id}")
     lines.extend(
         [
-            "If you need to send a Telegram message or file back into this same conversation,",
-            "use these exact identifiers with the Telegram tools.",
+            "For an ordinary reply to this same conversation, prefer speak.",
+            "Use Telegram tools only when you need a file upload or proactive delivery to a chat.",
+            "If you do need to use a Telegram tool in this same conversation, use these exact identifiers.",
         ]
     )
     return "\n".join(lines)
@@ -126,25 +119,9 @@ def _merge_context_prefix(*parts: str | None) -> str | None:
     return "\n\n".join(merged)
 
 
-def _should_handle_message(
-    message: dict[str, Any],
-    bot_username: str | None,
-    bot_id: int | None,
-    agent_name: str | None = None,
-) -> bool:
-    text = str(message.get("text", ""))
+def _is_human_message(message: dict[str, Any]) -> bool:
     user = message.get("from", {})
-    mention = bool(bot_username and f"@{bot_username.lower()}" in text.lower())
-    reply_to_bot = bool(bot_id and message.get("reply_to_message", {}).get("from", {}).get("id") == bot_id)
-    detector = BotCallDetector(agent_name)
-    decision = detector.detect_telegram(
-        text=text,
-        is_private_chat=_is_private_chat(message),
-        mention=mention,
-        reply_to_bot=reply_to_bot,
-        sender_is_bot=bool(user.get("is_bot")),
-    )
-    return decision.should_respond
+    return bool(message.get("text")) and not bool(user.get("is_bot"))
 
 
 def _session_id_from_message(message: dict[str, Any]) -> str:
@@ -169,6 +146,27 @@ def _reply_to_message_id(message: dict[str, Any]) -> int | None:
         return None
 
 
+def _debounce_key_for_message(session_id: str, message: dict[str, Any]) -> str:
+    if _is_private_chat(message):
+        return f"{session_id}:{message.get('from', {}).get('id', '')}"
+    return session_id
+
+
+def _merge_prompt_text(items: list[_BufferedTelegramMessage]) -> str:
+    if not items:
+        return ""
+    if _is_private_chat(items[-1].message):
+        return "\n".join(item.prompt for item in items if item.prompt.strip())
+
+    lines = ["Recent room messages:"]
+    for item in items:
+        text = item.prompt.strip()
+        if not text:
+            continue
+        lines.append(f"- {item.user_name}: {text}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 class TelegramGateway:
     def __init__(
         self,
@@ -190,7 +188,6 @@ class TelegramGateway:
             on_flush=self._flush_debounced_messages,
             label="telegram",
         )
-        self._bot_call_detector = BotCallDetector(settings.agent_name)
         if self.configured:
             self.state = "configured"
 
@@ -301,22 +298,11 @@ class TelegramGateway:
                 await asyncio.sleep(2)
 
     async def _handle_message(self, message: dict[str, Any]) -> None:
-        bot_username = str(self.identity.get("username") or "")
-        bot_id = int(self.identity.get("id") or 0) or None
-        if not message.get("text"):
+        if not _is_human_message(message):
             return
+        bot_username = str(self.identity.get("username") or "")
         text = str(message.get("text", ""))
         mention = bool(bot_username and f"@{bot_username.lower()}" in text.lower())
-        reply_to_bot = bool(bot_id and message.get("reply_to_message", {}).get("from", {}).get("id") == bot_id)
-        decision = self._bot_call_detector.detect_telegram(
-            text=text,
-            is_private_chat=_is_private_chat(message),
-            mention=mention,
-            reply_to_bot=reply_to_bot,
-            sender_is_bot=bool(message.get("from", {}).get("is_bot")),
-        )
-        if not decision.should_respond:
-            return
 
         user = message.get("from", {})
         user_name = _display_name(user)
@@ -330,7 +316,6 @@ class TelegramGateway:
             bot_username,
             mention=mention,
             agent_name=self.settings.agent_name,
-            direct_name_call=decision.direct_name_call,
         )
         if not prompt:
             return
@@ -339,7 +324,7 @@ class TelegramGateway:
         chat_id = message.get("chat", {}).get("id")
         reply_to_message_id = _reply_to_message_id(message)
         await self._debouncer.enqueue(
-            f"{session_id}:{user.get('id', '')}",
+            _debounce_key_for_message(session_id, message),
             _BufferedTelegramMessage(
                 message=message,
                 session_id=session_id,
@@ -353,7 +338,7 @@ class TelegramGateway:
 
     async def _flush_debounced_messages(self, items: list[_BufferedTelegramMessage]) -> None:
         last = items[-1]
-        merged_prompt = "\n".join(item.prompt for item in items if item.prompt.strip())
+        merged_prompt = _merge_prompt_text(items)
         await self._run_for_message(
             message=last.message,
             session_id=last.session_id,
@@ -376,7 +361,7 @@ class TelegramGateway:
         mention: bool,
     ) -> None:
         metadata = {
-            "source": "telegram-group" if mention else "telegram-dm",
+            "source": "telegram-dm" if _is_private_chat(message) else "telegram-group",
             "chat_id": str(chat_id),
             "user": str(message.get("from", {}).get("id", "")),
             "user_name": user_name,
@@ -393,9 +378,18 @@ class TelegramGateway:
     async def _publish_result(self, chat_id: int | str, reply_to_message_id: int | None, record: RunRecord) -> None:
         if record.state == "failed":
             text = f"Run failed.\n{record.error or 'Unknown error'}"
-        else:
-            text = (record.result.final_response if record.result else "") or "Run completed without a final response."
-        await self.send_message(chat_id, text, reply_to_message_id=reply_to_message_id)
+            await self.send_message(chat_id, text, reply_to_message_id=reply_to_message_id)
+            return
+
+        spoken_messages = list(record.result.spoken_messages) if record.result else []
+        if spoken_messages:
+            rendered_messages = list(spoken_messages)
+            rendered_messages[-1] = append_tool_summary(rendered_messages[-1], record.result.tool_events)
+            for text in rendered_messages:
+                await self.send_message(chat_id, text, reply_to_message_id=reply_to_message_id)
+            return
+
+        return
 
     async def _api(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._session is None or self._session.closed:

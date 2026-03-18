@@ -58,7 +58,7 @@ if [[ ! -x "$ROOT_DIR/.venv/bin/python" ]]; then
   echo "[bridge] bootstrapping python environment with uv"
   (cd "$ROOT_DIR" && uv sync --extra dev)
 fi
-"$ROOT_DIR/.venv/bin/python" -m pytest -q
+"$ROOT_DIR/.venv/bin/python" -m pytest -q "$ROOT_DIR/tests"
 
 echo "[bridge] building smoke bridge app"
 rm -rf "$DIST_DIR"

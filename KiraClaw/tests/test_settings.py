@@ -64,6 +64,7 @@ def test_auto_mode_prefers_legacy_kira_home(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("KIRACLAW_MODEL", raising=False)
     monkeypatch.delenv("KIRACLAW_DATA_DIR", raising=False)
     monkeypatch.delenv("KIRACLAW_WORKSPACE_DIR", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
 

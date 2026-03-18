@@ -96,7 +96,31 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
           cd ${{ env.CLAW_DESKTOP_DIR }}
-          npm run deploy:public:mac
+          npm run build:public:mac
+
+      - name: Verify macOS packaged app layout
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          APP_BUNDLE="${{ env.CLAW_DESKTOP_DIR }}/dist-public/mac-arm64/KiraClaw.app"
+          APP_ASAR="$APP_BUNDLE/Contents/Resources/app.asar"
+          test -f "$APP_ASAR"
+          npx --yes @electron/asar list "$APP_ASAR" | grep -q '^/lib/constants\.js$'
+          test -f "${{ env.CLAW_DESKTOP_DIR }}/dist-public/latest-mac.yml"
+
+      - name: Upload macOS public release to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-northeast-2
+        run: |
+          aws s3 sync "${{ env.CLAW_DESKTOP_DIR }}/dist-public" "s3://kira-releases/download/kiraclaw" \
+            --exclude "*" \
+            --include "*.dmg" \
+            --include "*.zip" \
+            --include "*.yml" \
+            --include "*.blockmap" \
+            --acl public-read
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -149,7 +173,21 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false  # Skip code signing
         run: |
           cd ${{ env.CLAW_DESKTOP_DIR }}
-          npm run deploy:public:win
+          npm run build:public:win
+
+      - name: Upload Windows public release to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-northeast-2
+        shell: bash
+        run: |
+          aws s3 sync "${{ env.CLAW_DESKTOP_DIR }}/dist-public" "s3://kira-releases/download/kiraclaw" \
+            --exclude "*" \
+            --include "*.exe" \
+            --include "*.yml" \
+            --include "*.blockmap" \
+            --acl public-read
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

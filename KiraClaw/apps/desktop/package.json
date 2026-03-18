@@ -6,6 +6,15 @@
   "author": "KRAFTON AI",
   "description": "KiraClaw desktop shell",
   "main": "main.js",
+  "files": [
+    "main.js",
+    "preload.js",
+    "lib/**/*",
+    "renderer/**/*",
+    "assets/**/*",
+    "icons/**/*",
+    "package.json"
+  ],
   "scripts": {
     "start": "electron .",
     "verify:bridge": "bash ../../scripts/verify_bridge_release.sh",

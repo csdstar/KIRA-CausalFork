@@ -8,7 +8,7 @@ hero:
   text: Agentic Desktop Runtime
   tagline: 로컬 대화, Slack/Telegram 채널, workspace skills, schedules, run logs를 하나의 데스크톱 앱으로.
   image:
-    src: /images/screenshots/hero-kira.png
+    src: /images/screenshots/hero-kira-claw.png
     alt: KiraClaw
   actions:
     - theme: brand

@@ -18,6 +18,9 @@ from kiraclaw_agentd.tool_event_summary import append_tool_summary
 logger = logging.getLogger(__name__)
 _CHANNEL_DEBOUNCE_SECONDS = 5.0
 _DISCORD_MESSAGE_URL = "https://discord.com/api/v10/channels/{channel_id}/messages"
+_DISCORD_USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
+_DISCORD_CHANNEL_MENTION_RE = re.compile(r"<#(\d+)>")
+_DISCORD_ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 
 
 @dataclass
@@ -111,6 +114,49 @@ def _clean_prompt_text(
     return _normalize_text(text)
 
 
+def _resolve_message_mentions(
+    message: Any,
+    text: str,
+    bot_user_id: int | str | None,
+    *,
+    mention: bool,
+    agent_name: str | None = None,
+) -> str:
+    cleaned = _clean_prompt_text(text, bot_user_id, mention=mention, agent_name=agent_name)
+    if "<@" not in cleaned and "<#" not in cleaned:
+        return cleaned
+
+    user_names = {
+        str(getattr(user, "id", "")): f"@{_display_name(user)}"
+        for user in list(getattr(message, "mentions", []) or [])
+        if str(getattr(user, "id", "")) and str(getattr(user, "id", "")) != str(bot_user_id or "")
+    }
+    channel_names = {
+        str(getattr(channel, "id", "")): f"#{str(getattr(channel, 'name', '') or getattr(channel, 'id', '')).strip()}"
+        for channel in list(getattr(message, "channel_mentions", []) or [])
+        if str(getattr(channel, "id", ""))
+    }
+    role_names = {
+        str(getattr(role, "id", "")): f"@{str(getattr(role, 'name', '') or getattr(role, 'id', '')).strip()}"
+        for role in list(getattr(message, "role_mentions", []) or [])
+        if str(getattr(role, "id", ""))
+    }
+
+    def replace_user(match: re.Match[str]) -> str:
+        return user_names.get(match.group(1), match.group(0))
+
+    def replace_channel(match: re.Match[str]) -> str:
+        return channel_names.get(match.group(1), match.group(0))
+
+    def replace_role(match: re.Match[str]) -> str:
+        return role_names.get(match.group(1), match.group(0))
+
+    resolved = _DISCORD_USER_MENTION_RE.sub(replace_user, cleaned)
+    resolved = _DISCORD_CHANNEL_MENTION_RE.sub(replace_channel, resolved)
+    resolved = _DISCORD_ROLE_MENTION_RE.sub(replace_role, resolved)
+    return resolved
+
+
 def _build_delivery_context_prefix(channel_id: int | str, reply_to_message_id: int | None) -> str:
     lines = [
         "Current Discord delivery context for this conversation:",
@@ -176,7 +222,8 @@ def _build_message_prompt(
     mention: bool,
     agent_name: str | None = None,
 ) -> str:
-    text = _clean_prompt_text(
+    text = _resolve_message_mentions(
+        message,
         str(getattr(message, "content", "") or ""),
         bot_user_id,
         mention=mention,

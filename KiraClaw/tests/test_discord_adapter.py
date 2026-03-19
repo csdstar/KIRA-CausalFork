@@ -9,6 +9,7 @@ from kiraclaw_agentd.discord_adapter import (
     _is_human_message,
     _matchable_name,
     _reply_to_message_id,
+    _resolve_message_mentions,
     _session_id_from_message,
 )
 from kiraclaw_agentd.engine import RunResult
@@ -26,8 +27,15 @@ class _FakeUser:
 
 
 class _FakeChannel:
-    def __init__(self, channel_id: int) -> None:
+    def __init__(self, channel_id: int, name: str | None = None) -> None:
         self.id = channel_id
+        self.name = name or str(channel_id)
+
+
+class _FakeRole:
+    def __init__(self, role_id: int, name: str) -> None:
+        self.id = role_id
+        self.name = name
 
 
 class _FakeMessage:
@@ -41,6 +49,9 @@ class _FakeMessage:
         guild=None,
         raw_mentions: list[int] | None = None,
         attachments: list[object] | None = None,
+        mentions: list[object] | None = None,
+        channel_mentions: list[object] | None = None,
+        role_mentions: list[object] | None = None,
     ) -> None:
         self.channel = _FakeChannel(channel_id)
         self.id = message_id
@@ -49,6 +60,9 @@ class _FakeMessage:
         self.guild = guild
         self.raw_mentions = raw_mentions or []
         self.attachments = attachments or []
+        self.mentions = mentions or []
+        self.channel_mentions = channel_mentions or []
+        self.role_mentions = role_mentions or []
 
 
 class _FakeAttachment:
@@ -68,6 +82,25 @@ def test_discord_display_name_and_matchable_name() -> None:
 def test_discord_prompt_cleanup_strips_bot_mention() -> None:
     assert _clean_prompt_text("  <@123>   check   this  ", 123, mention=True, agent_name="세나") == "세나 check this"
     assert _clean_prompt_text("  hello   there ", 123, mention=False) == "hello there"
+
+
+def test_discord_resolves_user_channel_and_role_mentions_into_prompt_text() -> None:
+    text = _resolve_message_mentions(
+        _FakeMessage(
+            channel_id=1,
+            message_id=1,
+            content="<@123> ask <@456> in <#789> with <@&321>",
+            author=_FakeUser(user_id=10, name="jiho"),
+            mentions=[_FakeUser(user_id=456, name="alice", display_name="Alice")],
+            channel_mentions=[_FakeChannel(789, "project-updates")],
+            role_mentions=[_FakeRole(321, "backend")],
+        ),
+        "<@123> ask <@456> in <#789> with <@&321>",
+        123,
+        mention=True,
+        agent_name="세나",
+    )
+    assert text == "세나 ask @Alice in #project-updates with @backend"
 
 
 def test_discord_human_message_and_sessions() -> None:
@@ -303,6 +336,46 @@ def test_discord_group_messages_are_handled_as_room_transcript_without_direct_ca
         assert len(session_manager.calls) == 1
         assert session_manager.calls[0]["metadata"]["source"] == "discord-group"
         assert session_manager.calls[0]["prompt"] == "Recent room messages:\n- Jiho: 우리 회의 몇시지?\n- Mina: 아까 문서 업데이트됨"
+        assert sent == []
+
+    asyncio.run(scenario())
+
+
+def test_discord_handle_message_resolves_inbound_channel_mention(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            discord_enabled=False,
+            agent_name="세나",
+        )
+        session_manager = _FakeSessionManager(spoken=[], final_response="internal only")
+        gateway = DiscordGateway(session_manager, settings, debounce_seconds=0.05)
+        gateway.identity = {"id": 999, "name": "kira"}
+        sent: list[dict] = []
+
+        async def fake_send(channel_id, text, reply_to_message_id=None):
+            sent.append({"channel_id": channel_id, "text": text, "reply_to_message_id": reply_to_message_id})
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+
+        message = _FakeMessage(
+            channel_id=777,
+            message_id=10,
+            content="<@999> <#12345> 로 올려줘",
+            author=_FakeUser(user_id=10, name="jiho", display_name="Jiho"),
+            guild=object(),
+            raw_mentions=[999],
+            channel_mentions=[_FakeChannel(12345, "announcements")],
+        )
+
+        await gateway._handle_message(message)
+        await asyncio.sleep(0.12)
+
+        assert len(session_manager.calls) == 1
+        assert session_manager.calls[0]["prompt"] == "Recent room messages:\n- Jiho: 세나 #announcements 로 올려줘"
         assert sent == []
 
     asyncio.run(scenario())

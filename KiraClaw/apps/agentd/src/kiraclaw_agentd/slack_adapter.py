@@ -19,6 +19,7 @@ from kiraclaw_agentd.tool_event_summary import append_tool_summary
 logger = logging.getLogger(__name__)
 _APP_MENTION_RE = re.compile(r"<@[^>]+>")
 _USER_MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
+_CHANNEL_MENTION_RE = re.compile(r"<#([CDG][A-Z0-9]+)(?:\|([^>]+))?>")
 _CHANNEL_DEBOUNCE_SECONDS = 5.0
 
 
@@ -236,6 +237,7 @@ class SlackGateway:
         self.last_error: str | None = None
         self.identity: dict[str, str] = {}
         self._user_name_cache: dict[str, str] = {}
+        self._channel_name_cache: dict[str, str] = {}
         self.socket_mode_validated: bool = False
         self._debouncer = KeyedDebouncer[_BufferedSlackEvent](
             delay_seconds=debounce_seconds,
@@ -397,6 +399,23 @@ class SlackGateway:
             logger.warning("Failed to fetch Slack user info for %s: %s", user_id, exc)
 
         return user_id
+
+    async def _get_channel_name(self, client, channel_id: str) -> str:
+        cached = self._channel_name_cache.get(channel_id)
+        if cached:
+            return cached
+
+        try:
+            response = await client.conversations_info(channel=channel_id)
+            if response.get("ok"):
+                channel = response.get("channel") or {}
+                name = str(channel.get("name") or channel_id).strip() or channel_id
+                self._channel_name_cache[channel_id] = name
+                return name
+        except Exception as exc:
+            logger.warning("Failed to fetch Slack channel info for %s: %s", channel_id, exc)
+
+        return channel_id
 
     async def _schedule_event(self, event: dict[str, Any], client, logger, mention: bool) -> None:
         if not _is_human_message_event(event):
@@ -617,7 +636,7 @@ class SlackGateway:
         return "Slack"
 
     async def _resolve_user_mentions_in_text(self, client, text: str) -> str:
-        if "<@" not in text:
+        if "<@" not in text and "<#" not in text:
             return text
 
         bot_user_id = self.identity.get("user_id")
@@ -626,12 +645,14 @@ class SlackGateway:
             for match in _USER_MENTION_RE.finditer(text)
             if match.group(1) != bot_user_id
         }
-        if not mentioned_user_ids:
-            return text
-
         resolved_names = {
             user_id: await self._get_user_name(client, user_id)
             for user_id in mentioned_user_ids
+        }
+        mentioned_channels = list(_CHANNEL_MENTION_RE.finditer(text))
+        resolved_channel_names = {
+            match.group(1): (match.group(2) or await self._get_channel_name(client, match.group(1)))
+            for match in mentioned_channels
         }
 
         def replace(match: re.Match[str]) -> str:
@@ -643,4 +664,13 @@ class SlackGateway:
                 return match.group(0)
             return f"@{name}"
 
-        return _USER_MENTION_RE.sub(replace, text)
+        resolved = _USER_MENTION_RE.sub(replace, text)
+
+        def replace_channel(match: re.Match[str]) -> str:
+            channel_id = match.group(1)
+            channel_name = (resolved_channel_names.get(channel_id) or channel_id).strip()
+            if not channel_name:
+                return match.group(0)
+            return f"#{channel_name}"
+
+        return _CHANNEL_MENTION_RE.sub(replace_channel, resolved)

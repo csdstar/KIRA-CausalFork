@@ -16,7 +16,17 @@ function resolveUserPath(app, requestedPath) {
   return path.resolve(targetPath);
 }
 
-function registerIpcHandlers({ app, ipcMain, configStore, daemonController }) {
+function unsupportedUpdaterState(app) {
+  return {
+    supported: false,
+    status: "unsupported",
+    version: app.getVersion(),
+    progress: 0,
+    message: "",
+  };
+}
+
+function registerIpcHandlers({ app, ipcMain, configStore, daemonController, getUpdaterState }) {
   ipcMain.handle("get-app-meta", async () => ({
     version: app.getVersion(),
     name: app.getName(),
@@ -89,6 +99,34 @@ function registerIpcHandlers({ app, ipcMain, configStore, daemonController }) {
   ipcMain.handle("start-daemon", async () => daemonController.start());
   ipcMain.handle("stop-daemon", async () => daemonController.stop());
   ipcMain.handle("restart-daemon", async () => daemonController.restart());
+  ipcMain.handle("get-updater-state", async () => {
+    const updaterState = getUpdaterState?.();
+    if (!updaterState?.getState) {
+      return unsupportedUpdaterState(app);
+    }
+    return updaterState.getState();
+  });
+  ipcMain.handle("check-for-updates", async () => {
+    const updaterState = getUpdaterState?.();
+    if (!updaterState?.checkForUpdates) {
+      return unsupportedUpdaterState(app);
+    }
+    return updaterState.checkForUpdates();
+  });
+  ipcMain.handle("download-update", async () => {
+    const updaterState = getUpdaterState?.();
+    if (!updaterState?.downloadUpdate) {
+      return unsupportedUpdaterState(app);
+    }
+    return updaterState.downloadUpdate();
+  });
+  ipcMain.handle("install-update", async () => {
+    const updaterState = getUpdaterState?.();
+    if (!updaterState?.installUpdate) {
+      return unsupportedUpdaterState(app);
+    }
+    return updaterState.installUpdate();
+  });
 }
 
 module.exports = {

@@ -2,6 +2,15 @@ function setupAutoUpdater() {
   let autoUpdater;
   let log;
   let updateLifecycle = null;
+  let pendingCheckPrompt = false;
+  let promptingForDownload = false;
+  let updateState = {
+    supported: false,
+    status: "unsupported",
+    version: "",
+    progress: 0,
+    message: "",
+  };
 
   try {
     ({ autoUpdater } = require("electron-updater"));
@@ -45,6 +54,13 @@ function setupAutoUpdater() {
   autoUpdater.logger = log;
   autoUpdater.logger.transports.file.level = "info";
   autoUpdater.logger.info(`Using packaged app-update.yml: ${updateConfigPath}`);
+  updateState = {
+    supported: true,
+    status: "idle",
+    version: app.getVersion(),
+    progress: 0,
+    message: "",
+  };
   clearIncompatiblePendingUpdate(updaterCacheDir, app.getName(), autoUpdater.logger);
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -52,8 +68,57 @@ function setupAutoUpdater() {
     updateLifecycle = "installing";
     log.info("Auto-update: before-quit-for-update");
   });
-  let promptingForDownload = false;
-  let promptingForRestart = false;
+
+  function setUpdateState(patch) {
+    updateState = {
+      ...updateState,
+      ...patch,
+    };
+  }
+
+  async function promptForDownload(info) {
+    if (promptingForDownload) {
+      return false;
+    }
+
+    promptingForDownload = true;
+    try {
+      const focusedWindow = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
+      const result = await dialog.showMessageBox(focusedWindow, {
+        type: "info",
+        buttons: ["Download Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        title: "Update Available",
+        message: `Version ${info.version || updateState.version} is available.`,
+        detail: "Download the latest KiraClaw update in the background?",
+      });
+      if (result.response !== 0) {
+        return false;
+      }
+
+      setUpdateState({
+        supported: true,
+        status: "downloading",
+        progress: 0,
+        message: `Downloading version ${info.version || updateState.version}...`,
+      });
+      await autoUpdater.downloadUpdate();
+      return true;
+    } catch (error) {
+      log.error("Auto-update available dialog failed:", error);
+      setUpdateState({
+        supported: true,
+        status: "error",
+        progress: 0,
+        message: String(error?.message || error || "Update download failed."),
+      });
+      return false;
+    } finally {
+      promptingForDownload = false;
+    }
+  }
+
   if (!isInApplicationsFolder(bundlePath, app.getPath("home"))) {
     log.warn("Auto-update may be unreliable because the app is not running from Applications.", {
       bundlePath,
@@ -73,81 +138,141 @@ function setupAutoUpdater() {
 
   autoUpdater.on("checking-for-update", () => {
     log.info("Auto-update: checking for update");
+    setUpdateState({
+      supported: true,
+      status: "checking",
+      version: updateState.version || app.getVersion(),
+      progress: 0,
+      message: "Checking for updates...",
+    });
   });
 
-  autoUpdater.on("update-available", async (info) => {
+  autoUpdater.on("update-available", (info) => {
     log.info("Auto-update: update available", info);
-    if (promptingForDownload) {
-      return;
-    }
-    promptingForDownload = true;
-    try {
-      const focusedWindow = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
-      const result = await dialog.showMessageBox(focusedWindow, {
-        type: "info",
-        buttons: ["Download Now", "Later"],
-        defaultId: 0,
-        cancelId: 1,
-        title: "Update Available",
-        message: `Version ${info.version} is available.`,
-        detail: "Download the latest KiraClaw update in the background?",
-      });
-      if (result.response === 0) {
-        await autoUpdater.downloadUpdate();
-      }
-    } catch (error) {
-      log.error("Auto-update available dialog failed:", error);
-    } finally {
-      promptingForDownload = false;
+    setUpdateState({
+      supported: true,
+      status: "available",
+      version: info.version || updateState.version,
+      progress: 0,
+      message: `Version ${info.version} is available.`,
+    });
+    if (pendingCheckPrompt) {
+      pendingCheckPrompt = false;
+      void promptForDownload(info);
     }
   });
 
   autoUpdater.on("update-not-available", (info) => {
     log.info("Auto-update: no update available", info);
+    pendingCheckPrompt = false;
+    setUpdateState({
+      supported: true,
+      status: "current",
+      version: app.getVersion(),
+      progress: 0,
+      message: "KiraClaw is up to date.",
+    });
   });
 
   autoUpdater.on("download-progress", (progress) => {
     log.info("Auto-update: download progress", progress);
+    setUpdateState({
+      supported: true,
+      status: "downloading",
+      progress: Number(progress?.percent || 0),
+      message: `Downloading update… ${Math.round(Number(progress?.percent || 0))}%`,
+    });
   });
 
-  autoUpdater.on("update-downloaded", async (info) => {
+  autoUpdater.on("update-downloaded", (info) => {
     log.info("Auto-update: update downloaded", info);
-    if (promptingForRestart) {
-      return;
-    }
-    promptingForRestart = true;
-    try {
-      const focusedWindow = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
-      const result = await dialog.showMessageBox(focusedWindow, {
-        type: "info",
-        buttons: ["Restart Now", "Later"],
-        defaultId: 0,
-        cancelId: 1,
-        title: "Update Ready",
-        message: `Version ${info.version} has been downloaded.`,
-        detail: "Restart now to apply the latest KiraClaw update.",
-      });
-      if (result.response === 0) {
-        setImmediate(() => autoUpdater.quitAndInstall(false, true));
-      }
-    } catch (error) {
-      log.error("Auto-update dialog failed:", error);
-    } finally {
-      promptingForRestart = false;
-    }
+    setUpdateState({
+      supported: true,
+      status: "downloaded",
+      version: info.version || updateState.version,
+      progress: 100,
+      message: `Version ${info.version} has been downloaded.`,
+    });
   });
 
   autoUpdater.on("error", (error) => {
     log.error("Auto-update error:", error);
+    pendingCheckPrompt = false;
+    setUpdateState({
+      supported: true,
+      status: "error",
+      progress: 0,
+      message: String(error?.message || error || "Update failed."),
+    });
   });
 
+  pendingCheckPrompt = true;
+  setUpdateState({
+    supported: true,
+    status: "checking",
+    version: updateState.version || app.getVersion(),
+    progress: 0,
+    message: "Checking for updates...",
+  });
   autoUpdater.checkForUpdates().catch((error) => {
     log.error("Auto-update check failed:", error);
+    pendingCheckPrompt = false;
+    setUpdateState({
+      supported: true,
+      status: "error",
+      progress: 0,
+      message: String(error?.message || error || "Update check failed."),
+    });
   });
 
   return {
+    getState() {
+      return { ...updateState };
+    },
     isInstallingUpdate() {
       return updateLifecycle === "installing";
+    },
+    async checkForUpdates() {
+      try {
+        pendingCheckPrompt = false;
+        await autoUpdater.checkForUpdates();
+        return { ...updateState };
+      } catch (error) {
+        log.error("Manual auto-update check failed:", error);
+        pendingCheckPrompt = false;
+        setUpdateState({
+          supported: true,
+          status: "error",
+          progress: 0,
+          message: String(error?.message || error || "Update check failed."),
+        });
+        return { ...updateState };
+      }
+    },
+    async downloadUpdate() {
+      if (updateState.status !== "available") {
+        return { ...updateState };
+      }
+      try {
+        await promptForDownload({ version: updateState.version });
+        return { ...updateState };
+      } catch (error) {
+        log.error("Manual update download failed:", error);
+        setUpdateState({
+          supported: true,
+          status: "error",
+          progress: 0,
+          message: String(error?.message || error || "Update download failed."),
+        });
+        return { ...updateState };
+      }
+    },
+    async installUpdate() {
+      if (updateState.status !== "downloaded") {
+        return { ...updateState };
+      }
+      setImmediate(() => autoUpdater.quitAndInstall(false, true));
+      return { ...updateState };
     },
   };
 }

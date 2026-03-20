@@ -13,6 +13,7 @@ export const state = {
     visible: false,
   },
   runtime: null,
+  updater: null,
   skills: null,
   schedules: [],
   scheduleFile: "",

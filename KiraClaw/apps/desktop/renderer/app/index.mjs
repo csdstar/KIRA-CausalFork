@@ -15,6 +15,7 @@ const api = window.kiraclaw;
 let engineActionTimer = null;
 let slackRetrieveOauthPollTimer = null;
 let runLogPollTimer = null;
+let updaterPollTimer = null;
 
 function syncSlackRetrieveConnectState() {
   const connectButton = byId("connect-slack-retrieve");
@@ -54,6 +55,9 @@ function rerenderLanguageSensitiveViews() {
 
 async function refreshActiveView() {
   await refreshRuntime();
+  if (state.activeView === "overview") {
+    await loadUpdaterState();
+  }
   if (state.activeView === "skills") {
     await loadSkills();
   }
@@ -77,6 +81,27 @@ function clearEngineActionTimer() {
     window.clearTimeout(engineActionTimer);
     engineActionTimer = null;
   }
+}
+
+function stopUpdaterPolling() {
+  if (updaterPollTimer) {
+    window.clearInterval(updaterPollTimer);
+    updaterPollTimer = null;
+  }
+}
+
+function startUpdaterPolling() {
+  stopUpdaterPolling();
+  if (state.activeView !== "overview") {
+    return;
+  }
+
+  updaterPollTimer = window.setInterval(() => {
+    if (document.visibilityState !== "visible" || state.activeView !== "overview") {
+      return;
+    }
+    loadUpdaterState().catch(() => {});
+  }, 1000);
 }
 
 function stopRunLogPolling() {
@@ -180,6 +205,42 @@ async function loadAppMeta() {
     state.appMeta = null;
   }
   renderDesktopState();
+}
+
+async function loadUpdaterState() {
+  try {
+    state.updater = await api.getUpdaterState();
+  } catch {
+    state.updater = {
+      supported: false,
+      status: "unsupported",
+      version: state.appMeta?.version || "",
+      progress: 0,
+      message: "",
+    };
+  }
+  renderDesktopState();
+}
+
+async function maybeCheckForUpdatesOnOverview() {
+  try {
+    if (!state.updater) {
+      await loadUpdaterState();
+    }
+
+    const status = String(state.updater?.status || "idle");
+    if (!state.updater?.supported) {
+      return;
+    }
+    if (["checking", "available", "downloading", "downloaded"].includes(status)) {
+      return;
+    }
+
+    state.updater = await api.checkForUpdates();
+    renderDesktopState();
+  } catch {
+    await loadUpdaterState();
+  }
 }
 
 async function loadSkills() {
@@ -363,13 +424,40 @@ function bindActions() {
       } else {
         stopRunLogPolling();
       }
+      if (viewName === "overview") {
+        startUpdaterPolling();
+      } else {
+        stopUpdaterPolling();
+      }
       refreshRuntime().catch(() => {});
+      if (viewName === "overview") {
+        maybeCheckForUpdatesOnOverview().catch(() => {});
+      }
     },
   });
   bindHomeActions({
     onStart: () => runDaemonAction("start"),
     onRestart: () => runDaemonAction("restart"),
     onStop: () => runDaemonAction("stop"),
+    onUpdaterAction: async () => {
+      try {
+        const updater = state.updater || {};
+        const status = String(updater.status || "idle");
+        if (status === "available") {
+          await api.downloadUpdate();
+        } else if (status === "downloaded") {
+          await api.installUpdate();
+        } else if (status === "checking" || status === "downloading") {
+          return;
+        } else {
+          await api.checkForUpdates();
+        }
+      } catch (error) {
+        setSettingsStatus(error.message);
+      } finally {
+        await loadUpdaterState();
+      }
+    },
   });
   bindSettingsActions({
     state,
@@ -507,7 +595,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindActions();
   await loadAppMeta();
   await loadConfig();
+  await loadUpdaterState();
+  await maybeCheckForUpdatesOnOverview();
   await refreshActiveView();
   await loadRunLogs();
+  startUpdaterPolling();
   startRunLogPolling();
 });

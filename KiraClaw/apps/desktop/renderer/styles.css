@@ -207,8 +207,15 @@ select {
 }
 
 .sidebar-foot {
-  padding: 0 var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-4);
   -webkit-app-region: no-drag;
+}
+
+.sidebar-foot .status-chip {
+  width: 100%;
+  justify-content: center;
+  padding: 6px 10px;
 }
 
 .inline-copy {
@@ -498,10 +505,18 @@ select {
   letter-spacing: -0.045em;
 }
 
-.hero-version {
+.landing-meta-panel {
   position: absolute;
   top: 27px;
   right: 16px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.hero-version {
   display: block;
   padding: 0;
   font-size: 11px;
@@ -509,7 +524,65 @@ select {
   text-transform: uppercase;
   color: var(--landing-version-color);
   opacity: 1;
-  pointer-events: none;
+}
+
+.updater-panel {
+  display: flex;
+  align-items: flex-end;
+}
+
+.updater-panel[hidden] {
+  display: none;
+}
+
+.updater-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 10px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow: none;
+}
+
+.updater-action-label {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.updater-panel[data-state="available"] .updater-action {
+  border-color: rgba(var(--accent-rgb), 0.44);
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text);
+}
+
+.updater-panel[data-state="downloaded"] .updater-action {
+  border-color: rgba(79, 209, 139, 0.4);
+  background: rgba(79, 209, 139, 0.08);
+  color: #ffffff;
+}
+
+.updater-panel[data-state="current"] .updater-action,
+.updater-panel[data-state="idle"] .updater-action,
+.updater-panel[data-state="error"] .updater-action {
+  color: var(--landing-version-color);
+  border-color: rgba(0, 0, 0, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="red"] .updater-action {
+  border-color: rgba(0, 0, 0, 0.56);
+}
+
+:root[data-theme="red"] .updater-panel .updater-action {
+  color: #000000;
 }
 
 .hero-copy {
@@ -667,7 +740,8 @@ select {
   background: #000000;
   padding: 0;
   box-shadow:
-    0 20px 36px rgba(0, 0, 0, 0.24),
+    0 8px 14px rgba(255, 255, 255, 0.05),
+    0 20px 34px rgba(255, 255, 255, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
@@ -1824,5 +1898,10 @@ button:disabled {
 
   .landing-center h3 {
     font-size: 25px;
+  }
+
+  .landing-meta-panel {
+    top: 48px;
+    right: 18px;
   }
 }

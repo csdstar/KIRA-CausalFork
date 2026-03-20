@@ -57,6 +57,7 @@ app.whenReady().then(() => {
     ipcMain,
     configStore,
     daemonController,
+    getUpdaterState: () => updaterState,
   });
   openMainWindow();
   updaterState = setupAutoUpdater();

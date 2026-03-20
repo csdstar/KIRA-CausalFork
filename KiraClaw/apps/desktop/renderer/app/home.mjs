@@ -29,6 +29,9 @@ export function updateHomeStatus(state, daemonStatus, runtime) {
   const avatarShell = byId("landing-avatar-shell");
   const heroTitle = byId("hero-title");
   const heroVersion = byId("hero-version");
+  const updaterPanel = byId("updater-panel");
+  const updaterAction = byId("updater-action");
+  const updaterActionLabel = byId("updater-action-label");
   const agentBubble = byId("agent-bubble");
   const startButton = byId("start-daemon");
   const restartButton = byId("restart-daemon");
@@ -54,6 +57,7 @@ export function updateHomeStatus(state, daemonStatus, runtime) {
 
   setText(heroTitle, "KiraClaw");
   setText(heroVersion, state.appMeta?.version ? `v${state.appMeta.version}` : "");
+  renderUpdaterState(state.updater, updaterPanel, updaterAction, updaterActionLabel);
   setText(agentBubble, t("home.myNameIs", { name: agentName }));
 
   if (startButton && restartButton && stopButton) {
@@ -111,8 +115,60 @@ function defaultBannerState(statusState) {
   };
 }
 
-export function bindHomeActions({ onStart, onRestart, onStop }) {
+function renderUpdaterState(updater, panel, actionButton, actionLabel) {
+  if (!panel || !actionButton || !actionLabel) {
+    return;
+  }
+
+  if (!updater?.supported) {
+    panel.hidden = true;
+    actionButton.hidden = true;
+    actionButton.disabled = true;
+    setText(actionLabel, "");
+    return;
+  }
+
+  const status = String(updater.status || "idle");
+  const version = String(updater.version || "").trim();
+  const roundedProgress = Math.max(0, Math.min(100, Math.round(Number(updater.progress || 0))));
+
+  panel.hidden = false;
+  panel.dataset.state = status;
+
+  let nextButtonText = "";
+  let showButton = true;
+  let disableButton = false;
+
+  if (status === "checking") {
+    nextButtonText = t("updater.checkingAction");
+    disableButton = true;
+  } else if (status === "available") {
+    nextButtonText = t("updater.availableAction", { version: version || t("updater.latest") });
+  } else if (status === "downloading") {
+    nextButtonText = t("updater.downloadingAction", { progress: String(roundedProgress) });
+    disableButton = true;
+  } else if (status === "downloaded") {
+    nextButtonText = t("updater.downloadedAction");
+  } else if (status === "error") {
+    nextButtonText = t("updater.checkAction");
+  } else if (status === "current") {
+    nextButtonText = t("updater.checkAction");
+  } else {
+    nextButtonText = t("updater.checkAction");
+  }
+
+  if (!nextButtonText) {
+    showButton = false;
+  }
+
+  actionButton.hidden = !showButton;
+  actionButton.disabled = disableButton;
+  setText(actionLabel, nextButtonText);
+}
+
+export function bindHomeActions({ onStart, onRestart, onStop, onUpdaterAction }) {
   byId("start-daemon")?.addEventListener("click", onStart);
   byId("restart-daemon")?.addEventListener("click", onRestart);
   byId("stop-daemon")?.addEventListener("click", onStop);
+  byId("updater-action")?.addEventListener("click", onUpdaterAction);
 }

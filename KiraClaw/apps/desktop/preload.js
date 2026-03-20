@@ -61,6 +61,18 @@ contextBridge.exposeInMainWorld("kiraclaw", {
   restartDaemon() {
     return ipcRenderer.invoke("restart-daemon");
   },
+  getUpdaterState() {
+    return ipcRenderer.invoke("get-updater-state");
+  },
+  checkForUpdates() {
+    return ipcRenderer.invoke("check-for-updates");
+  },
+  downloadUpdate() {
+    return ipcRenderer.invoke("download-update");
+  },
+  installUpdate() {
+    return ipcRenderer.invoke("install-update");
+  },
   getRuntime() {
     return request("/v1/runtime");
   },

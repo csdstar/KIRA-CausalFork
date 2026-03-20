@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from kiraclaw_agentd.api import create_app
 from kiraclaw_agentd.engine import RunResult
+from kiraclaw_agentd.session_manager import RunRecord
 from kiraclaw_agentd.settings import get_settings
 from kiraclaw_agentd.slack_retrieve_oauth import SlackRetrieveOAuthResult
 
@@ -103,3 +104,39 @@ def test_slack_retrieve_oauth_flow_persists_token(tmp_path: Path, monkeypatch) -
     assert status_response.status_code == 200
     assert status_response.json()["status"] == "success"
     assert (home / ".kira" / "config.env").read_text(encoding="utf-8").find('SLACK_RETRIEVE_TOKEN="xoxp-test-token"') != -1
+
+
+def test_run_logs_endpoint_includes_live_records(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    get_settings.cache_clear()
+
+    app = create_app()
+    app.router.on_startup.clear()
+    app.router.on_shutdown.clear()
+
+    app.state.run_log_store.observe(
+        RunRecord(
+            run_id="run-live",
+            session_id="desktop:test",
+            state="running",
+            prompt="hello",
+            created_at="2026-01-01T00:00:00Z",
+            started_at="2026-01-01T00:00:01Z",
+            result=RunResult(
+                final_response="",
+                streamed_text="thinking",
+                tool_events=[{"phase": "start", "name": "search"}],
+            ),
+            metadata={"source": "api"},
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/v1/run-logs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["logs"][0]["run_id"] == "run-live"
+    assert body["logs"][0]["state"] == "running"
+    assert body["logs"][0]["streamed_text"] == "thinking"

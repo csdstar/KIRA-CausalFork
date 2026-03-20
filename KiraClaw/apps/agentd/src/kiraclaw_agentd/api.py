@@ -123,7 +123,7 @@ def create_app() -> FastAPI:
         engine,
         memory_context_provider=memory_runtime.build_context,
         on_record_complete=memory_runtime.enqueue_save,
-        record_observer=run_log_store.append,
+        record_observer=run_log_store.observe,
     )
     slack_gateway = SlackGateway(session_manager, settings)
     telegram_gateway = TelegramGateway(session_manager, settings)

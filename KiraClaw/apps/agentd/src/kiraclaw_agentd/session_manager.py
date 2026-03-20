@@ -162,6 +162,7 @@ class SessionLane:
         build_context: Callable[[str, str, str | None], str | None],
         build_memory_context: Callable[[str, str, dict[str, Any] | None], str | None],
         on_record_complete: Callable[[RunRecord], Any],
+        on_record_update: Callable[[RunRecord], Any],
         on_idle: Callable[[str, "SessionLane"], None],
     ) -> None:
         self.session_id = session_id
@@ -170,6 +171,7 @@ class SessionLane:
         self._build_context = build_context
         self._build_memory_context = build_memory_context
         self._on_record_complete = on_record_complete
+        self._on_record_update = on_record_update
         self._on_idle = on_idle
         self.queue: asyncio.Queue[tuple[RunRecord, asyncio.Future[RunRecord], RunRequest]] = asyncio.Queue()
         self.worker_task: asyncio.Task[None] | None = None
@@ -210,6 +212,15 @@ class SessionLane:
                 try:
                     record.state = "running"
                     record.started_at = utc_now()
+                    record.result = RunResult(
+                        final_response="",
+                        streamed_text="",
+                        tool_events=[],
+                        spoken_messages=[],
+                    )
+                    maybe_result = self._on_record_update(record)
+                    if inspect.isawaitable(maybe_result):
+                        await maybe_result
                     conversation_context = self._build_context(
                         self.session_id,
                         record.run_id,
@@ -228,6 +239,7 @@ class SessionLane:
                         conversation_context,
                         memory_context,
                         {**request.metadata, "session_id": self.session_id},
+                        live_result=record.result,
                     )
                     record.result = result
                     record.state = "completed"
@@ -401,6 +413,7 @@ class SessionManager:
                 build_context=self._build_conversation_context,
                 build_memory_context=self._build_memory_context,
                 on_record_complete=self._notify_record_complete,
+                on_record_update=self._observe_record,
                 on_idle=self._release_lane,
             )
             self._lanes[session_id] = lane
@@ -425,6 +438,7 @@ class SessionManager:
             metadata=metadata or {},
         )
         self._append_record(session_id, record)
+        await self._observe_record(record)
         record = await lane.enqueue(
             RunRequest(
                 prompt=prompt,

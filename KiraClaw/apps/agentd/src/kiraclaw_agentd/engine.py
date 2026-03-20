@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from krim_sdk import Agent, AgentOptions, NullEventHandler
@@ -26,6 +27,7 @@ class RunResult:
     streamed_text: str
     tool_events: list[dict] = field(default_factory=list)
     spoken_messages: list[str] = field(default_factory=list)
+    trace_events: list[dict] = field(default_factory=list)
 
     @property
     def internal_summary(self) -> str:
@@ -40,27 +42,45 @@ class RunResult:
 
 
 class CapturingEventHandler(NullEventHandler):
-    def __init__(self) -> None:
+    def __init__(self, live_result: RunResult | None = None) -> None:
         self.stream_chunks: list[str] = []
-        self.tool_events: list[dict] = []
+        self.tool_events: list[dict] = live_result.tool_events if live_result is not None else []
+        self.trace_events: list[dict] = live_result.trace_events if live_result is not None else []
         self.summary: str = ""
         self.model_errors: list[str] = []
+        self.live_result = live_result
 
     def on_stream(self, text: str) -> None:
         self.stream_chunks.append(text)
+        if self.live_result is not None:
+            self.live_result.streamed_text += text
+        if self.trace_events and self.trace_events[-1].get("type") == "stream":
+            self.trace_events[-1]["text"] = str(self.trace_events[-1].get("text") or "") + text
+            self.trace_events[-1]["at"] = _event_timestamp()
+        else:
+            self.trace_events.append({"type": "stream", "text": text, "at": _event_timestamp()})
 
     def on_event(self, event: Event) -> None:
         if event.type == EventType.MODEL_ERROR:
-            self.model_errors.append(event.data.get("error", "unknown model error"))
+            error = event.data.get("error", "unknown model error")
+            self.model_errors.append(error)
+            if self.live_result is not None:
+                self.live_result.final_response = str(error)
+            self.trace_events.append({"type": "error", "error": str(error), "at": _event_timestamp()})
 
     def on_tool_start(self, name: str, args: dict) -> None:
         self.tool_events.append({"phase": "start", "name": name, "args": args})
+        self.trace_events.append({"type": "tool_start", "name": name, "args": args, "at": _event_timestamp()})
 
     def on_tool_end(self, name: str, result: str) -> None:
         self.tool_events.append({"phase": "end", "name": name, "result": result})
+        self.trace_events.append({"type": "tool_end", "name": name, "result": result, "at": _event_timestamp()})
 
     def on_submit(self, summary: str) -> None:
         self.summary = summary
+        if self.live_result is not None:
+            self.live_result.final_response = summary
+        self.trace_events.append({"type": "submit", "text": summary, "at": _event_timestamp()})
 
 
 def create_model(provider: str, model: str | None, max_tokens: int):
@@ -179,6 +199,7 @@ class KiraClawEngine:
         conversation_context: str | None = None,
         memory_context: str | None = None,
         tool_context: dict[str, object] | None = None,
+        live_result: RunResult | None = None,
     ) -> RunResult:
         selected_provider = provider or self.settings.provider
         selected_model = model or self.settings.model
@@ -186,11 +207,19 @@ class KiraClawEngine:
         run_tool_context = dict(tool_context or {})
         spoken_messages: list[str] = []
         run_tool_context["__spoken_messages__"] = spoken_messages
+        if live_result is None:
+            live_result = RunResult(final_response="", streamed_text="", tool_events=[], spoken_messages=spoken_messages)
+        else:
+            live_result.final_response = ""
+            live_result.streamed_text = ""
+            live_result.tool_events.clear()
+            live_result.spoken_messages = spoken_messages
+            live_result.trace_events.clear()
         tools, skill_rows = _configure_tools(self.settings, tool_context=run_tool_context)
         tool_names = [tool.name for tool in tools]
         mcp_tools = list(self.mcp_runtime.tools)
         mcp_tool_names = [tool.name for tool in mcp_tools]
-        handler = CapturingEventHandler()
+        handler = CapturingEventHandler(live_result)
 
         agent = Agent(
             model=create_model(
@@ -227,12 +256,9 @@ class KiraClawEngine:
                 "Agent run completed without a final response. "
                 "Check provider credentials and model configuration."
             )
-        return RunResult(
-            final_response=internal_summary,
-            streamed_text="".join(handler.stream_chunks),
-            tool_events=handler.tool_events,
-            spoken_messages=spoken_messages,
-        )
+        live_result.final_response = internal_summary
+        live_result.streamed_text = "".join(handler.stream_chunks)
+        return live_result
 
 
 def _compose_prompt(
@@ -259,3 +285,7 @@ def _compose_prompt(
         parts.append(f"<recent_conversation>\n{conversation_context}\n</recent_conversation>")
     parts.append(f"<current_user_request>\n{prompt}\n</current_user_request>")
     return "\n\n".join(parts)
+
+
+def _event_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()

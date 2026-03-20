@@ -19,6 +19,7 @@ class FakeEngine:
         conversation_context: str | None = None,
         memory_context: str | None = None,
         tool_context: dict | None = None,
+        live_result: RunResult | None = None,
     ) -> RunResult:
         return RunResult(final_response=prompt, streamed_text=prompt)
 
@@ -36,6 +37,7 @@ class CapturingEngine:
         conversation_context: str | None = None,
         memory_context: str | None = None,
         tool_context: dict | None = None,
+        live_result: RunResult | None = None,
     ) -> RunResult:
         self.calls.append(
             {
@@ -64,6 +66,7 @@ class StaticResultEngine:
         conversation_context: str | None = None,
         memory_context: str | None = None,
         tool_context: dict | None = None,
+        live_result: RunResult | None = None,
     ) -> RunResult:
         return self._result
 
@@ -299,7 +302,11 @@ def test_session_manager_calls_record_observer_after_run_completion(tmp_path) ->
 
         record = await manager.run("desktop:local", "hello")
 
-        assert observed == [(record.run_id, "completed")]
+        assert observed == [
+            (record.run_id, "queued"),
+            (record.run_id, "running"),
+            (record.run_id, "completed"),
+        ]
 
     asyncio.run(scenario())
 

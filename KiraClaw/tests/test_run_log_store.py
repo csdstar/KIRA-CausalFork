@@ -82,3 +82,58 @@ def test_run_log_store_appends_and_tails_recent_entries(tmp_path) -> None:
 
     filtered = store.tail(limit=5, session_id="slack:C1:main")
     assert [row["run_id"] for row in filtered] == ["run-2"]
+
+
+def test_run_log_store_keeps_live_runs_until_they_finish(tmp_path) -> None:
+    settings = KiraClawSettings(
+        data_dir=tmp_path / "data",
+        workspace_dir=tmp_path / "workspace",
+        home_mode="modern",
+        slack_enabled=False,
+    )
+    settings.ensure_directories()
+    store = RunLogStore(settings)
+
+    running = RunRecord(
+        run_id="run-live",
+        session_id="desktop:local",
+        state="running",
+        prompt="stream this",
+        created_at="2026-01-01T00:00:00Z",
+        started_at="2026-01-01T00:00:01Z",
+        result=RunResult(
+            final_response="",
+            streamed_text="partial output",
+            tool_events=[{"phase": "start", "name": "search"}],
+        ),
+        metadata={"source": "api"},
+    )
+    completed = RunRecord(
+        run_id="run-done",
+        session_id="desktop:local",
+        state="completed",
+        prompt="done",
+        created_at="2026-01-01T00:00:02Z",
+        finished_at="2026-01-01T00:00:03Z",
+        result=RunResult(final_response="done", streamed_text="done"),
+        metadata={"source": "api"},
+    )
+
+    store.append(completed)
+    store.observe(running)
+
+    rows = store.tail(limit=5)
+    assert [row["run_id"] for row in rows] == ["run-live", "run-done"]
+    assert rows[0]["state"] == "running"
+    assert rows[0]["streamed_text"] == "partial output"
+    assert rows[0]["tool_summary"] == "Used: search"
+
+    running.state = "completed"
+    running.finished_at = "2026-01-01T00:00:04Z"
+    running.result.final_response = "final output"
+    store.observe(running)
+
+    rows = store.tail(limit=5)
+    assert [row["run_id"] for row in rows] == ["run-live", "run-done"]
+    assert rows[0]["state"] == "completed"
+    assert rows[0]["internal_summary"] == "final output"

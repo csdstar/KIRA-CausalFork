@@ -14,6 +14,7 @@ import { initTheme } from "./theme.mjs";
 const api = window.kiraclaw;
 let engineActionTimer = null;
 let slackRetrieveOauthPollTimer = null;
+let runLogPollTimer = null;
 
 function syncSlackRetrieveConnectState() {
   const connectButton = byId("connect-slack-retrieve");
@@ -76,6 +77,27 @@ function clearEngineActionTimer() {
     window.clearTimeout(engineActionTimer);
     engineActionTimer = null;
   }
+}
+
+function stopRunLogPolling() {
+  if (runLogPollTimer) {
+    window.clearInterval(runLogPollTimer);
+    runLogPollTimer = null;
+  }
+}
+
+function startRunLogPolling() {
+  stopRunLogPolling();
+  if (state.activeView !== "runs") {
+    return;
+  }
+
+  runLogPollTimer = window.setInterval(() => {
+    if (document.visibilityState !== "visible" || state.activeView !== "runs") {
+      return;
+    }
+    loadRunLogs().catch(() => {});
+  }, 1000);
 }
 
 function stopSlackRetrieveOauthPolling() {
@@ -336,6 +358,11 @@ function bindActions() {
       if (viewName === "runs") {
         loadRunLogs().catch(() => {});
       }
+      if (viewName === "runs") {
+        startRunLogPolling();
+      } else {
+        stopRunLogPolling();
+      }
       refreshRuntime().catch(() => {});
     },
   });
@@ -482,4 +509,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadConfig();
   await refreshActiveView();
   await loadRunLogs();
+  startRunLogPolling();
 });

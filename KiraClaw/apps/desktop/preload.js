@@ -90,6 +90,25 @@ contextBridge.exposeInMainWorld("kiraclaw", {
     }
     return request(`/v1/run-logs?${query.toString()}`);
   },
+  getResources(kind = "") {
+    const query = new URLSearchParams();
+    if (kind) {
+      query.set("kind", kind);
+    }
+    const suffix = query.toString();
+    return request(`/v1/resources${suffix ? `?${suffix}` : ""}`);
+  },
+  getDaemonEvents(limit = 100, resourceKind = "", resourceId = "") {
+    const query = new URLSearchParams();
+    query.set("limit", String(limit));
+    if (resourceKind) {
+      query.set("resource_kind", resourceKind);
+    }
+    if (resourceId) {
+      query.set("resource_id", resourceId);
+    }
+    return request(`/v1/daemon-events?${query.toString()}`);
+  },
   getDesktopMessages(sessionId = "desktop:local") {
     const query = new URLSearchParams();
     query.set("session_id", sessionId);

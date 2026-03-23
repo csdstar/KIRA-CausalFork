@@ -213,6 +213,28 @@ function renderTrace(entries) {
   }).join("");
 }
 
+function stateClassForStatus(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (["running", "online", "ready", "completed", "loaded", "connected"].includes(text)) {
+    return "online";
+  }
+  if (["failed", "offline", "stopped", "error", "disconnected"].includes(text)) {
+    return "offline";
+  }
+  return text ? "running" : "";
+}
+
+function summarizeResourceData(value) {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const entries = Object.entries(value)
+    .filter(([, item]) => item !== null && item !== undefined && item !== "")
+    .slice(0, 4)
+    .map(([key, item]) => `${key}: ${typeof item === "object" ? JSON.stringify(item) : String(item)}`);
+  return entries.join(" · ");
+}
+
 function logCard(row) {
   const displayTime =
     row.state === "running" || row.state === "queued"
@@ -241,6 +263,56 @@ function logCard(row) {
           ${renderTrace(buildTraceEntries(row))}
         </div>
       </details>
+    </article>
+  `;
+}
+
+function daemonResourceCard(row) {
+  const metaParts = [
+    row.kind || "",
+    formatTime(row.updated_at),
+  ].filter(Boolean);
+  const dataSummary = summarizeResourceData(row.data);
+
+  return `
+    <article class="simple-item daemon-resource-card">
+      <div class="daemon-resource-head">
+        <div class="daemon-resource-title-block">
+          <strong>${escapeHtml(row.id || t("common.none"))}</strong>
+          <p class="daemon-resource-meta">${escapeHtml(metaParts.join(" · "))}</p>
+        </div>
+        <span class="status-chip ${stateClassForStatus(row.state)}">${escapeHtml(row.state || t("logs.unknownState"))}</span>
+      </div>
+      ${dataSummary ? `<p class="daemon-resource-data">${escapeHtml(dataSummary)}</p>` : ""}
+    </article>
+  `;
+}
+
+function daemonEventCard(row) {
+  const metaParts = [
+    row.type || "",
+    row.resource_kind || "",
+    row.resource_id || "",
+    formatTime(row.created_at),
+  ].filter(Boolean);
+  const payload = formatToolPayload(row.payload);
+  const hasPayload = payload !== String(t("common.none"));
+
+  return `
+    <article class="simple-item daemon-event-card">
+      <div class="daemon-event-head">
+        <strong>${escapeHtml(row.message || row.type || t("common.none"))}</strong>
+        <span class="status-chip ${stateClassForStatus(row.level)}">${escapeHtml(row.level || "info")}</span>
+      </div>
+      <p class="daemon-event-meta">${escapeHtml(metaParts.join(" · "))}</p>
+      ${hasPayload ? `
+        <details class="details-card daemon-event-details">
+          <summary>${escapeHtml(t("common.viewDetails"))}</summary>
+          <div class="details-body">
+            <pre class="run-trace-payload daemon-event-payload">${escapeHtml(payload)}</pre>
+          </div>
+        </details>
+      ` : ""}
     </article>
   `;
 }
@@ -299,9 +371,103 @@ export function renderRunLogsState(state) {
   );
 }
 
+export function renderDaemonPlaneState(state) {
+  const resourceList = byId("daemon-resource-list");
+  if (resourceList) {
+    if (state.daemonResourceError) {
+      resourceList.innerHTML = `
+        <article class="simple-item">
+          <strong>${escapeHtml(t("logs.daemonResourcesLoadFailedTitle"))}</strong>
+          <p>${escapeHtml(state.daemonResourceError)}</p>
+        </article>
+      `;
+      setText(
+        byId("daemon-resource-status"),
+        t("logs.daemonResourcesLoadFailed", { message: state.daemonResourceError }),
+      );
+    } else if (!Array.isArray(state.daemonResources) || state.daemonResources.length === 0) {
+      resourceList.innerHTML = `
+        <article class="simple-item">
+          <strong>${escapeHtml(t("logs.noDaemonResourcesTitle"))}</strong>
+          <p>${escapeHtml(t("logs.noDaemonResourcesBody"))}</p>
+        </article>
+      `;
+      setText(byId("daemon-resource-status"), t("logs.noDaemonResources"));
+    } else {
+      resourceList.innerHTML = state.daemonResources.map(daemonResourceCard).join("");
+      setText(
+        byId("daemon-resource-status"),
+        t("logs.daemonResourceCount", {
+          count: state.daemonResources.length,
+          suffix: state.daemonResources.length === 1 ? "" : "s",
+        }),
+      );
+    }
+    setText(
+      byId("daemon-resource-count"),
+      t("logs.daemonResourceChip", {
+        count: Array.isArray(state.daemonResources) ? state.daemonResources.length : 0,
+      }),
+    );
+  }
+
+  const eventList = byId("daemon-event-list");
+  if (eventList) {
+    if (state.daemonEventError) {
+      eventList.innerHTML = `
+        <article class="simple-item">
+          <strong>${escapeHtml(t("logs.daemonEventsLoadFailedTitle"))}</strong>
+          <p>${escapeHtml(state.daemonEventError)}</p>
+        </article>
+      `;
+      setText(
+        byId("daemon-event-status"),
+        t("logs.daemonEventsLoadFailed", { message: state.daemonEventError }),
+      );
+    } else if (!Array.isArray(state.daemonEvents) || state.daemonEvents.length === 0) {
+      eventList.innerHTML = `
+        <article class="simple-item">
+          <strong>${escapeHtml(t("logs.noDaemonEventsTitle"))}</strong>
+          <p>${escapeHtml(t("logs.noDaemonEventsBody"))}</p>
+        </article>
+      `;
+      setText(
+        byId("daemon-event-status"),
+        state.daemonEventFile
+          ? t("logs.noDaemonEventsWithFile", { path: state.daemonEventFile })
+          : t("logs.noDaemonEvents"),
+      );
+    } else {
+      eventList.innerHTML = state.daemonEvents.map(daemonEventCard).join("");
+      const suffix = state.daemonEventFile ? ` · ${state.daemonEventFile}` : "";
+      setText(
+        byId("daemon-event-status"),
+        t("logs.daemonEventCount", {
+          count: state.daemonEvents.length,
+          suffix: state.daemonEvents.length === 1 ? "" : "s",
+          fileSuffix: suffix,
+        }),
+      );
+    }
+    setText(
+      byId("daemon-event-count"),
+      t("logs.daemonEventChip", {
+        count: Array.isArray(state.daemonEvents) ? state.daemonEvents.length : 0,
+      }),
+    );
+  }
+}
+
 export function bindRunLogActions({ state, onReload, onOpenPath }) {
   byId("reload-run-logs")?.addEventListener("click", onReload);
   byId("open-run-log-file")?.addEventListener("click", () => {
     onOpenPath(state.runLogFile);
+  });
+}
+
+export function bindDaemonPlaneActions({ state, onReload, onOpenPath }) {
+  byId("reload-daemon-plane")?.addEventListener("click", onReload);
+  byId("open-daemon-event-file")?.addEventListener("click", () => {
+    onOpenPath(state.daemonEventFile);
   });
 }

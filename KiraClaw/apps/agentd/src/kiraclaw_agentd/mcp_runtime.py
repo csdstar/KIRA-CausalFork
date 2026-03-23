@@ -8,6 +8,7 @@ import shutil
 import sys
 import threading
 from pathlib import Path
+from typing import Any, Callable
 
 from krim.mcp import McpServer, McpServerConfig
 
@@ -320,7 +321,12 @@ def build_mcp_server_configs(settings: KiraClawSettings) -> list[McpServerConfig
     configs.extend(_external_mcp_configs(settings))
     return configs
 class McpRuntime:
-    def __init__(self, settings: KiraClawSettings) -> None:
+    def __init__(
+        self,
+        settings: KiraClawSettings,
+        *,
+        observer: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
         self.settings = settings
         self.state: str = "disabled"
         self.last_error: str | None = None
@@ -330,6 +336,26 @@ class McpRuntime:
         self.loaded_server_names: list[str] = []
         self.deferred_server_names: list[str] = []
         self._lock = threading.RLock()
+        self._observer = observer
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "state": self.state,
+                "last_error": self.last_error,
+                "loaded_servers": list(self.loaded_server_names),
+                "failed_servers": list(self.failed_server_names),
+                "deferred_servers": list(self.deferred_server_names),
+                "tool_names": self.tool_names,
+            }
+
+    def _notify(self, action: str, payload: dict[str, Any]) -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer(action, payload)
+        except Exception:
+            logger.exception("MCP observer failed for action %s", action)
 
     def _start_server(self, config: McpServerConfig) -> tuple[McpServer | None, str | None]:
         server = McpServer(config)
@@ -405,6 +431,19 @@ class McpRuntime:
                     if name not in self.failed_server_names:
                         self.failed_server_names.append(name)
             self._refresh_state_locked()
+            runtime_snapshot = self.snapshot()
+
+        for name in loaded_names:
+            self._notify(
+                "server_loaded",
+                {"name": name, "state": "running"},
+            )
+        for name in failed_names:
+            self._notify(
+                "server_failed",
+                {"name": name, "state": "failed", "error": self.last_error},
+            )
+        self._notify("runtime", runtime_snapshot)
 
         return loaded_names
 
@@ -417,6 +456,7 @@ class McpRuntime:
                 self.state = "disabled"
                 self.last_error = None
                 self.failed_server_names = []
+            self._notify("runtime", self.snapshot())
             return
 
         with self._lock:
@@ -424,6 +464,7 @@ class McpRuntime:
             self.last_error = None
             self.failed_server_names = []
             self.deferred_server_names = []
+        self._notify("runtime", self.snapshot())
 
         self._activate_configs(configs)
 
@@ -442,6 +483,7 @@ class McpRuntime:
             self.failed_server_names = []
             self.last_error = None
             self.state = "disabled"
+        self._notify("runtime", self.snapshot())
 
     @property
     def tool_names(self) -> list[str]:

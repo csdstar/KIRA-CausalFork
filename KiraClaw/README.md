@@ -250,7 +250,8 @@ KiraClaw/
   defaults/
     skills/     # Seed skills copied into new workspaces
   docs/
-    architecture.md
+    kiraclaw/concepts.md
+    openclaw/concepts.md
     bridge-release-checklist.md
     migration-from-kira-slack.md
     qa-benchmark.md
@@ -290,7 +291,8 @@ npm run verify:bridge
 
 ## Documentation
 
-- [architecture.md](docs/architecture.md)
+- [kiraclaw/concepts.md](docs/kiraclaw/concepts.md)
+- [openclaw/concepts.md](docs/openclaw/concepts.md)
 - [migration-from-kira-slack.md](docs/migration-from-kira-slack.md)
 - [bridge-release-checklist.md](docs/bridge-release-checklist.md)
 - [qa-benchmark.md](docs/qa-benchmark.md)

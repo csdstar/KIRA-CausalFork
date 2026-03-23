@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,6 +22,8 @@ class SchedulerRuntime:
         settings: KiraClawSettings,
         session_manager: SessionManager,
         channel_delivery: ChannelDelivery,
+        *,
+        observer: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self.settings = settings
         self.session_manager = session_manager
@@ -30,6 +32,7 @@ class SchedulerRuntime:
         self.state: str = "disabled"
         self.last_error: str | None = None
         self._known_mtime: float | None = None
+        self._observer = observer
 
     @property
     def enabled(self) -> bool:
@@ -39,24 +42,44 @@ class SchedulerRuntime:
     def job_count(self) -> int:
         return len(self.scheduler.get_jobs()) if self.scheduler.running else 0
 
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "last_error": self.last_error,
+            "job_count": self.job_count,
+            "schedule_file": str(self.settings.schedule_file) if self.settings.schedule_file else None,
+        }
+
+    def _notify(self, action: str, payload: dict[str, Any]) -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer(action, payload)
+        except Exception:
+            logger.exception("Scheduler observer failed for action %s", action)
+
     async def start(self) -> None:
         if not self.enabled:
             self.state = "disabled"
+            self._notify("runtime", self.snapshot())
             return
 
         ensure_schedule_file(self.settings.schedule_file)
         await self.reload_from_file(force=True)
         self.scheduler.start()
         self.state = "running"
+        self._notify("runtime", self.snapshot())
 
     async def stop(self) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         self.state = "disabled" if not self.enabled else "configured"
+        self._notify("runtime", self.snapshot())
 
     async def reload_from_file(self, *, force: bool = False) -> None:
         if not self.enabled:
             self.state = "disabled"
+            self._notify("runtime", self.snapshot())
             return
 
         schedule_file = self.settings.schedule_file
@@ -99,6 +122,8 @@ class SchedulerRuntime:
         self.last_error = None
         self.state = "running"
         logger.info("Scheduler runtime loaded %s schedules", count)
+        self._notify("runtime", self.snapshot())
+        self._notify("schedules_reloaded", {"schedule_count": count, "schedule_file": str(schedule_file)})
 
     async def _execute_schedule(self, schedule: dict[str, Any]) -> None:
         schedule_id = schedule.get("id", "unknown")
@@ -107,6 +132,14 @@ class SchedulerRuntime:
         prompt = schedule.get("text", "")
         user = schedule.get("user", "")
 
+        self._notify(
+            "schedule_fired",
+            {
+                "schedule_id": schedule_id,
+                "channel_type": channel_type or "slack",
+                "channel_target": channel_target,
+            },
+        )
         record = await self.session_manager.run(
             session_id=f"schedule:{schedule_id}",
             prompt=prompt,
@@ -134,6 +167,14 @@ class SchedulerRuntime:
                         "schedule_name": schedule.get("name", ""),
                     },
                 )
+        self._notify(
+            "schedule_completed",
+            {
+                "schedule_id": schedule_id,
+                "run_state": record.state,
+                "error": record.error,
+            },
+        )
 
     def _result_text(self, record: RunRecord) -> str:
         if record.state == "failed":

@@ -161,3 +161,34 @@ def test_exec_tool_applies_bash_safety_rules(tmp_path) -> None:
 
     assert result["success"] is False
     assert "command denied by safety rules" in result["error"]
+
+
+def test_process_manager_emits_started_and_finished_events(tmp_path) -> None:
+    settings = KiraClawSettings(
+        data_dir=tmp_path / "data",
+        workspace_dir=tmp_path / "workspace",
+        home_mode="modern",
+        slack_enabled=False,
+    )
+    settings.ensure_directories()
+    events: list[tuple[str, dict[str, object]]] = []
+    manager = BackgroundProcessManager(
+        workspace_dir=settings.workspace_dir,
+        deny_patterns=settings.deny_patterns,
+        allow_commands=settings.allow_commands,
+        ask_by_default=settings.ask_by_default,
+        max_output_chars=settings.max_output_chars,
+        observer=lambda action, snapshot: events.append((action, snapshot)),
+    )
+
+    session = manager.start(
+        command=_python_command("import time; print('hi'); time.sleep(0.1)"),
+        owner_session_id="desktop:local",
+    )
+    manager.wait_briefly(session.session_id, 10)
+    time.sleep(0.2)
+    manager.poll(session.session_id)
+
+    actions = [action for action, _snapshot in events]
+    assert "started" in actions
+    assert "finished" in actions

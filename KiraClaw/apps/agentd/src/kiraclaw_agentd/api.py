@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 
 from kiraclaw_agentd.channel_delivery import ChannelDelivery
+from kiraclaw_agentd.daemon_plane import DaemonPlane
 from kiraclaw_agentd.delivery_targets import DEFAULT_DESKTOP_SESSION_ID
 from kiraclaw_agentd.desktop_delivery import DesktopDelivery
 from kiraclaw_agentd.discord_adapter import DiscordGateway
@@ -118,7 +119,113 @@ def _agentd_version() -> str:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    engine = KiraClawEngine(settings)
+    daemon_plane = DaemonPlane(settings)
+
+    def observe_process(action: str, snapshot: dict[str, object]) -> None:
+        session_id = str(snapshot.get("session_id") or "").strip()
+        if not session_id:
+            return
+        status = str(snapshot.get("status") or "unknown").strip() or "unknown"
+        if action == "cleared":
+            daemon_plane.remove_resource(
+                "process",
+                session_id,
+                event_type="process.cleared",
+                message=f"Background process {session_id} cleared",
+                payload=dict(snapshot),
+            )
+            return
+
+        message_map = {
+            "started": f"Background process {session_id} started",
+            "finished": f"Background process {session_id} {status}",
+        }
+        daemon_plane.upsert_resource(
+            "process",
+            session_id,
+            status,
+            data=dict(snapshot),
+            event_type=f"process.{action}",
+            message=message_map.get(action, f"Background process {session_id} updated"),
+        )
+
+    def observe_mcp(action: str, payload: dict[str, Any]) -> None:
+        if action == "runtime":
+            state = str(payload.get("state") or "unknown").strip() or "unknown"
+            daemon_plane.upsert_resource(
+                "mcp_runtime",
+                "default",
+                state,
+                data=dict(payload),
+                event_type="mcp.runtime",
+                message=f"MCP runtime -> {state}",
+            )
+            return
+        if action == "server_loaded":
+            name = str(payload.get("name") or "").strip()
+            if name:
+                daemon_plane.upsert_resource(
+                    "mcp_server",
+                    name,
+                    "running",
+                    data=dict(payload),
+                    event_type="mcp.server_loaded",
+                    message=f"MCP server {name} loaded",
+                )
+            return
+        if action == "server_failed":
+            name = str(payload.get("name") or "").strip()
+            if name:
+                daemon_plane.upsert_resource(
+                    "mcp_server",
+                    name,
+                    "failed",
+                    data=dict(payload),
+                    event_type="mcp.server_failed",
+                    message=f"MCP server {name} failed",
+                    level="warning",
+                )
+
+    def observe_scheduler(action: str, payload: dict[str, Any]) -> None:
+        if action == "runtime":
+            state = str(payload.get("state") or "unknown").strip() or "unknown"
+            daemon_plane.upsert_resource(
+                "scheduler",
+                "default",
+                state,
+                data=dict(payload),
+                event_type="scheduler.runtime",
+                message=f"Scheduler -> {state}",
+            )
+            return
+        if action in {"schedule_fired", "schedule_completed"}:
+            schedule_id = str(payload.get("schedule_id") or "").strip()
+            if schedule_id:
+                state = "running" if action == "schedule_fired" else str(payload.get("run_state") or "completed")
+                daemon_plane.upsert_resource(
+                    "schedule_run",
+                    schedule_id,
+                    state,
+                    data=dict(payload),
+                    event_type=f"scheduler.{action}",
+                    message=f"Schedule {schedule_id} {state}",
+                    level="warning" if payload.get("error") else "info",
+                )
+            return
+        if action == "schedules_reloaded":
+            daemon_plane.emit(
+                "scheduler.schedules_reloaded",
+                message="Scheduler schedules reloaded",
+                resource_kind="scheduler",
+                resource_id="default",
+                payload=dict(payload),
+            )
+
+    engine = KiraClawEngine(
+        settings,
+        process_observer=observe_process,
+        mcp_observer=observe_mcp,
+    )
     memory_runtime = MemoryRuntime(settings)
     run_log_store = RunLogStore(settings)
     session_manager = SessionManager(
@@ -137,7 +244,12 @@ def create_app() -> FastAPI:
         discord_gateway=discord_gateway,
         desktop_delivery=desktop_delivery,
     )
-    scheduler_runtime = SchedulerRuntime(settings, session_manager, channel_delivery)
+    scheduler_runtime = SchedulerRuntime(
+        settings,
+        session_manager,
+        channel_delivery,
+        observer=observe_scheduler,
+    )
 
     app = FastAPI(title="KiraClaw Agentd", version=_agentd_version())
     app.state.session_manager = session_manager
@@ -149,6 +261,7 @@ def create_app() -> FastAPI:
     app.state.desktop_delivery = desktop_delivery
     app.state.scheduler_runtime = scheduler_runtime
     app.state.run_log_store = run_log_store
+    app.state.daemon_plane = daemon_plane
     redirect_uri = resolve_slack_retrieve_redirect_uri(
         configured_url=settings.slack_retrieve_redirect_url,
         host=settings.host,
@@ -162,17 +275,98 @@ def create_app() -> FastAPI:
         "result": _oauth_result("idle", "Slack Retrieve OAuth has not started yet."),
     }
 
+    def _channel_resource_payload(name: str, gateway: Any) -> dict[str, Any]:
+        payload = {
+            "configured": bool(getattr(gateway, "configured", False)),
+            "state": str(getattr(gateway, "state", "unknown") or "unknown"),
+            "last_error": getattr(gateway, "last_error", None),
+            "identity": dict(getattr(gateway, "identity", {}) or {}),
+        }
+        if name == "slack":
+            payload["socket_mode_validated"] = bool(getattr(gateway, "socket_mode_validated", False))
+        return payload
+
+    def _sync_daemon_resources(*, gateway_state: str = "running") -> None:
+        daemon_plane.upsert_resource(
+            "gateway",
+            "agentd",
+            gateway_state,
+            data={
+                "host": settings.host,
+                "port": settings.port,
+                "provider": settings.provider,
+                "model": settings.model,
+            },
+            event_type="gateway.runtime",
+            message="agentd resource updated",
+        )
+        daemon_plane.upsert_resource(
+            "channel",
+            "slack",
+            slack_gateway.state,
+            data=_channel_resource_payload("slack", slack_gateway),
+            event_type="channel.runtime",
+            message=f"Channel slack -> {slack_gateway.state}",
+        )
+        daemon_plane.upsert_resource(
+            "channel",
+            "telegram",
+            telegram_gateway.state,
+            data=_channel_resource_payload("telegram", telegram_gateway),
+            event_type="channel.runtime",
+            message=f"Channel telegram -> {telegram_gateway.state}",
+        )
+        daemon_plane.upsert_resource(
+            "channel",
+            "discord",
+            discord_gateway.state,
+            data=_channel_resource_payload("discord", discord_gateway),
+            event_type="channel.runtime",
+            message=f"Channel discord -> {discord_gateway.state}",
+        )
+        daemon_plane.upsert_resource(
+            "memory",
+            "default",
+            memory_runtime.state,
+            data={
+                "state": memory_runtime.state,
+                "last_error": memory_runtime.last_error,
+                "file_count": memory_runtime.file_count,
+                "queued_count": memory_runtime.queued_count,
+            },
+            event_type="memory.runtime",
+            message=f"Memory runtime -> {memory_runtime.state}",
+        )
+
     @app.on_event("startup")
     async def startup() -> None:
+        daemon_plane.upsert_resource(
+            "gateway",
+            "agentd",
+            "starting",
+            data={"host": settings.host, "port": settings.port},
+            event_type="gateway.starting",
+            message="agentd starting",
+        )
         await engine.start()
         await memory_runtime.start()
         await slack_gateway.start()
         await telegram_gateway.start()
         await discord_gateway.start()
         await scheduler_runtime.start()
+        _sync_daemon_resources(gateway_state="running")
+        daemon_plane.emit("gateway.started", message="agentd started", resource_kind="gateway", resource_id="agentd")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
+        daemon_plane.upsert_resource(
+            "gateway",
+            "agentd",
+            "stopping",
+            data={"host": settings.host, "port": settings.port},
+            event_type="gateway.stopping",
+            message="agentd stopping",
+        )
         await scheduler_runtime.stop()
         await discord_gateway.stop()
         await telegram_gateway.stop()
@@ -180,6 +374,15 @@ def create_app() -> FastAPI:
         await memory_runtime.stop()
         await session_manager.stop()
         await engine.stop()
+        _sync_daemon_resources(gateway_state="stopped")
+        daemon_plane.upsert_resource(
+            "gateway",
+            "agentd",
+            "stopped",
+            data={"host": settings.host, "port": settings.port},
+            event_type="gateway.stopped",
+            message="agentd stopped",
+        )
 
     @app.get("/health")
     async def health() -> dict:
@@ -187,6 +390,7 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/runtime")
     async def runtime() -> dict:
+        _sync_daemon_resources()
         return {
             "available_providers": ["claude", "openai", "vertex_ai"],
             "provider": settings.provider,
@@ -256,6 +460,8 @@ def create_app() -> FastAPI:
             "scheduler_last_error": scheduler_runtime.last_error,
             "scheduler_job_count": scheduler_runtime.job_count,
             "schedule_file": str(settings.schedule_file) if settings.schedule_file else None,
+            "daemon_event_file": str(daemon_plane.event_log_file),
+            "resource_counts": daemon_plane.resources.summary(),
             "workspace_dir": str(settings.workspace_dir),
             "data_dir": str(settings.data_dir),
             "legacy_data_dir": str(settings.legacy_data_dir),
@@ -314,6 +520,22 @@ def create_app() -> FastAPI:
         return {
             "logs": run_log_store.tail(limit=limit, session_id=session_id),
             "run_log_file": str(run_log_store.log_file),
+        }
+
+    @app.get("/v1/daemon-events")
+    async def daemon_events(limit: int = 100, resource_kind: str | None = None, resource_id: str | None = None) -> dict:
+        _sync_daemon_resources()
+        return {
+            "events": daemon_plane.events.tail(limit=limit, resource_kind=resource_kind, resource_id=resource_id),
+            "daemon_event_file": str(daemon_plane.event_log_file),
+        }
+
+    @app.get("/v1/resources")
+    async def resources(kind: str | None = None) -> dict:
+        _sync_daemon_resources()
+        return {
+            "resources": daemon_plane.resources.list(kind=kind),
+            "counts": daemon_plane.resources.summary(),
         }
 
     @app.get("/v1/desktop-messages")

@@ -409,6 +409,7 @@ select {
   flex: 0 0 auto;
   flex-wrap: nowrap;
   justify-content: flex-end;
+  margin-left: auto;
 }
 
 .view-foot .button-row button {
@@ -425,6 +426,11 @@ select {
 .button-row {
   flex-wrap: wrap;
   -webkit-app-region: no-drag;
+}
+
+.view-head .toolbar {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .language-picker,
@@ -1596,6 +1602,10 @@ button:disabled {
   gap: var(--space-2);
 }
 
+.view-foot.stacked {
+  align-items: flex-start;
+}
+
 .terminal-card {
   padding: 0;
   overflow: hidden;
@@ -1632,6 +1642,55 @@ button:disabled {
   font-family: "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
   font-size: 11px;
   color: var(--muted);
+}
+
+.daemon-resource-card,
+.daemon-event-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.daemon-resource-head,
+.daemon-event-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.daemon-resource-title-block {
+  min-width: 0;
+  flex: 1;
+}
+
+.daemon-resource-head strong,
+.daemon-event-head strong {
+  margin-bottom: 0;
+}
+
+.daemon-resource-meta,
+.daemon-event-meta,
+.daemon-resource-data {
+  margin: 0;
+  font-family: "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.daemon-resource-data {
+  color: var(--text);
+}
+
+.daemon-event-details {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.daemon-event-payload {
+  margin-bottom: 0;
 }
 
 .run-log-details {

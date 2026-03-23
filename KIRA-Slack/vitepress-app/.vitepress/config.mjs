@@ -23,7 +23,7 @@ gtag('config', 'G-05X6YL37F9');`],
     ['meta', { name: 'theme-color', content: '#f9423a' }],
     ['meta', { name: 'author', content: 'KRAFTON AI' }],
     ['meta', { name: 'robots', content: 'index, follow' }],
-    ['meta', { name: 'keywords', content: 'KiraClaw, AI agent, desktop runtime, Slack, Telegram, local AI, KRIM, KRAFTON AI' }],
+    ['meta', { name: 'keywords', content: 'KiraClaw, AI agent, desktop runtime, Slack, Telegram, local AI, core engine, KRAFTON AI' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'KiraClaw Documentation' }],
     ['meta', { property: 'og:url', content: siteUrl }],
@@ -45,6 +45,7 @@ gtag('config', 'G-05X6YL37F9');`],
       themeConfig: {
         nav: [
           { text: 'Home', link: '/' },
+          { text: 'Concepts', link: '/concepts' },
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Troubleshooting', link: '/troubleshooting' },
           { text: 'GitHub', link: 'https://github.com/krafton-ai/KIRA/tree/main/KiraClaw' }
@@ -70,6 +71,7 @@ gtag('config', 'G-05X6YL37F9');`],
       themeConfig: {
         nav: [
           { text: '홈', link: '/ko/' },
+          { text: '개념', link: '/ko/concepts' },
           { text: '시작하기', link: '/ko/getting-started' },
           { text: '문제 해결', link: '/ko/troubleshooting' },
           { text: 'GitHub', link: 'https://github.com/krafton-ai/KIRA/tree/main/KiraClaw' }

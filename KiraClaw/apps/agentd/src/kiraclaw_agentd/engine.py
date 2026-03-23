@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
 from krim_sdk import Agent, AgentOptions, NullEventHandler
 from krim_sdk.events import Event, EventType
@@ -184,15 +185,22 @@ def _ensure_provider_credentials(settings: KiraClawSettings, provider: str) -> N
 
 
 class KiraClawEngine:
-    def __init__(self, settings: KiraClawSettings) -> None:
+    def __init__(
+        self,
+        settings: KiraClawSettings,
+        *,
+        process_observer: Callable[[str, dict[str, object]], None] | None = None,
+        mcp_observer: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
         self.settings = settings
-        self.mcp_runtime = McpRuntime(settings)
+        self.mcp_runtime = McpRuntime(settings, observer=mcp_observer)
         self.process_manager = BackgroundProcessManager(
             workspace_dir=settings.workspace_dir,
             deny_patterns=settings.deny_patterns,
             allow_commands=settings.allow_commands,
             ask_by_default=settings.ask_by_default,
             max_output_chars=settings.max_output_chars,
+            observer=process_observer,
         )
 
     async def start(self) -> None:

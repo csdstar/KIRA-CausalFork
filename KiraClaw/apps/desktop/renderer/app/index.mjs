@@ -6,7 +6,7 @@ import { bindNavigation } from "./navigation.mjs";
 import { bindSettingsActions, applySettingsToForm, collectSettingsUpdates, setSettingsStatus } from "./settings.mjs";
 import { bindSkillsActions, renderSkillsState } from "./skills.mjs";
 import { bindScheduleActions, renderSchedulesState } from "./schedules.mjs";
-import { bindRunLogActions, renderRunLogsState } from "./logs.mjs";
+import { bindDaemonPlaneActions, bindRunLogActions, renderDaemonPlaneState, renderRunLogsState } from "./logs.mjs";
 import { initI18n, setLanguage, t } from "./i18n.mjs";
 import { state } from "./state.mjs";
 import { initTheme } from "./theme.mjs";
@@ -48,6 +48,7 @@ function rerenderLanguageSensitiveViews() {
   renderSkillsState(state);
   renderSchedulesState(state);
   renderRunLogsState(state);
+  renderDaemonPlaneState(state);
   const chatThread = byId("chat-thread");
   if (chatThread && chatThread.querySelectorAll(".terminal-entry").length <= 1) {
     clearChatThread(state);
@@ -70,6 +71,9 @@ async function refreshActiveView() {
   }
   if (state.activeView === "runs") {
     await loadRunLogs();
+  }
+  if (state.activeView === "diagnostics") {
+    await loadDaemonPlane();
   }
 }
 
@@ -138,15 +142,19 @@ function startDesktopMessagePolling() {
 
 function startRunLogPolling() {
   stopRunLogPolling();
-  if (state.activeView !== "runs") {
+  if (!["runs", "diagnostics"].includes(state.activeView)) {
     return;
   }
 
   runLogPollTimer = window.setInterval(() => {
-    if (document.visibilityState !== "visible" || state.activeView !== "runs") {
+    if (document.visibilityState !== "visible" || !["runs", "diagnostics"].includes(state.activeView)) {
       return;
     }
-    loadRunLogs().catch(() => {});
+    if (state.activeView === "runs") {
+      loadRunLogs().catch(() => {});
+      return;
+    }
+    loadDaemonPlane().catch(() => {});
   }, 1000);
 }
 
@@ -295,6 +303,10 @@ async function loadSchedules() {
 }
 
 async function loadRunLogs() {
+  await loadRecentRunLogs();
+}
+
+async function loadRecentRunLogs() {
   try {
     const response = await api.getRunLogs(50);
     state.runLogs = response.logs || [];
@@ -305,6 +317,30 @@ async function loadRunLogs() {
     state.runLogs = [];
     state.runLogFile = "";
     state.runLogError = error.message;
+    renderRunLogsState(state);
+  }
+}
+
+async function loadDaemonPlane() {
+  try {
+    const [resourcesResponse, eventsResponse] = await Promise.all([
+      api.getResources(),
+      api.getDaemonEvents(50),
+    ]);
+    state.daemonResources = resourcesResponse.resources || [];
+    state.daemonResourceCounts = resourcesResponse.counts || {};
+    state.daemonResourceError = "";
+    state.daemonEvents = eventsResponse.events || [];
+    state.daemonEventFile = eventsResponse.daemon_event_file || "";
+    state.daemonEventError = "";
+    renderRunLogsState(state);
+  } catch (error) {
+    state.daemonResources = [];
+    state.daemonResourceCounts = {};
+    state.daemonResourceError = error.message;
+    state.daemonEvents = [];
+    state.daemonEventFile = "";
+    state.daemonEventError = error.message;
     renderRunLogsState(state);
   }
 }
@@ -453,10 +489,13 @@ function bindActions() {
       if (viewName === "runs") {
         loadRunLogs().catch(() => {});
       }
+      if (viewName === "diagnostics") {
+        loadDaemonPlane().catch(() => {});
+      }
       if (viewName === "chat") {
         loadDesktopMessages().catch(() => {});
       }
-      if (viewName === "runs") {
+      if (viewName === "runs" || viewName === "diagnostics") {
         startRunLogPolling();
       } else {
         stopRunLogPolling();
@@ -610,6 +649,23 @@ function bindActions() {
       }
     },
   });
+  bindDaemonPlaneActions({
+    state,
+    onReload: loadDaemonPlane,
+    onOpenPath: async (targetPath) => {
+      if (!targetPath) {
+        setSettingsStatus(t("status.daemonEventFileNotConfigured"));
+        return;
+      }
+      setSettingsStatus(t("status.openingDaemonEventFile"));
+      try {
+        const result = await api.openPath(targetPath);
+        setSettingsStatus(result.message || t("status.daemonEventFileOpened"));
+      } catch (error) {
+        setSettingsStatus(t("status.openFolderFailed", { message: error.message }));
+      }
+    },
+  });
 
   window.addEventListener("focus", () => {
     refreshActiveView().catch(() => {});
@@ -641,6 +697,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await maybeCheckForUpdatesOnOverview();
   await refreshActiveView();
   await loadRunLogs();
+  await loadDaemonPlane();
   startUpdaterPolling();
   startRunLogPolling();
   startDesktopMessagePolling();

@@ -176,3 +176,45 @@ def test_desktop_messages_endpoint_drains_inbox(tmp_path: Path, monkeypatch) -> 
     ]
     assert second.status_code == 200
     assert second.json()["messages"] == []
+
+
+def test_resources_endpoint_returns_gateway_and_channels(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    get_settings.cache_clear()
+
+    app = create_app()
+    app.router.on_startup.clear()
+    app.router.on_shutdown.clear()
+
+    with TestClient(app) as client:
+        response = client.get("/v1/resources")
+
+    assert response.status_code == 200
+    body = response.json()
+    resources = {(row["kind"], row["id"]): row for row in body["resources"]}
+    assert ("gateway", "agentd") in resources
+    assert ("channel", "slack") in resources
+    assert ("channel", "telegram") in resources
+    assert ("channel", "discord") in resources
+    assert body["counts"]["gateway"] == 1
+
+
+def test_daemon_events_endpoint_returns_resource_events(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    get_settings.cache_clear()
+
+    app = create_app()
+    app.router.on_startup.clear()
+    app.router.on_shutdown.clear()
+
+    with TestClient(app) as client:
+        client.get("/v1/resources")
+        response = client.get("/v1/daemon-events", params={"resource_kind": "gateway"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["events"]
+    assert body["events"][0]["resource_kind"] == "gateway"
+    assert body["daemon_event_file"].endswith("daemon-events.jsonl")

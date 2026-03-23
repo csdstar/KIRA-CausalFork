@@ -8,7 +8,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TextIO
+from typing import Callable, TextIO
 from uuid import uuid4
 
 from krim_sdk.safety import Action, check_command
@@ -77,6 +77,7 @@ class BackgroundProcessManager:
         ask_by_default: bool,
         max_output_chars: int,
         log_buffer_chars: int | None = None,
+        observer: Callable[[str, dict[str, object]], None] | None = None,
     ) -> None:
         self._workspace_dir = Path(workspace_dir)
         self._deny_patterns = list(deny_patterns)
@@ -86,6 +87,7 @@ class BackgroundProcessManager:
         self._log_buffer_chars = max(log_buffer_chars or (self._max_output_chars * 4), self._max_output_chars)
         self._sessions: dict[str, ProcessSession] = {}
         self._lock = threading.Lock()
+        self._observer = observer
 
     def start(
         self,
@@ -139,6 +141,7 @@ class BackgroundProcessManager:
 
         self._start_stream_reader(session_id, process.stdout, "stdout")
         self._start_stream_reader(session_id, process.stderr, "stderr")
+        self._notify("started", session)
         return session
 
     def wait_briefly(self, session_id: str, yield_ms: int) -> bool:
@@ -188,8 +191,10 @@ class BackgroundProcessManager:
         session = self._refresh_status(self._get_session(session_id))
         if session.status == "running":
             raise ValueError("cannot_clear_running_process")
+        snapshot = self._snapshot(session, tail_chars=self._max_output_chars)
         with self._lock:
             self._sessions.pop(session_id, None)
+        self._notify("cleared", session, snapshot=snapshot)
 
     def stop_all(self) -> None:
         with self._lock:
@@ -200,6 +205,20 @@ class BackgroundProcessManager:
                 session.kill_requested = True
                 self._terminate_process(session.process)
             self._refresh_status(session)
+
+    def _notify(
+        self,
+        action: str,
+        session: ProcessSession,
+        *,
+        snapshot: dict[str, object] | None = None,
+    ) -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer(action, snapshot or self._snapshot(session, tail_chars=self._max_output_chars))
+        except Exception:
+            pass
 
     def _resolve_cwd(self, cwd: str | None) -> Path:
         if not cwd:
@@ -250,6 +269,7 @@ class BackgroundProcessManager:
             session.status = "running"
             return session
 
+        newly_finished = session.finished_at is None
         if session.finished_at is None:
             for thread in session.reader_threads:
                 thread.join(timeout=0.05)
@@ -261,6 +281,8 @@ class BackgroundProcessManager:
                 session.status = "completed"
             else:
                 session.status = "failed"
+        if newly_finished:
+            self._notify("finished", session)
         return session
 
     def _snapshot(self, session: ProcessSession, *, tail_chars: int) -> dict[str, object]:

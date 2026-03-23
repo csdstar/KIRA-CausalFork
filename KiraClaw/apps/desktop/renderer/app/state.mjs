@@ -21,5 +21,11 @@ export const state = {
   runLogs: [],
   runLogFile: "",
   runLogError: "",
+  daemonResources: [],
+  daemonResourceCounts: {},
+  daemonResourceError: "",
+  daemonEvents: [],
+  daemonEventFile: "",
+  daemonEventError: "",
   settingsDirty: false,
 };

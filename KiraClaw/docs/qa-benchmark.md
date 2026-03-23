@@ -17,6 +17,7 @@ It focuses on observable behavior, not implementation details.
 - Generated files are accessible from the desktop app or attached back to the channel when supported.
 - Multi-turn context works within the same session/thread/chat.
 - Recent runs remain inspectable in `Filesystem Base Dir/logs/runs.jsonl` or through `GET /v1/run-logs`.
+- Daemon state remains inspectable through `Diagnostics`, `GET /v1/resources`, and `GET /v1/daemon-events`.
 
 ## 1. Desktop shell
 
@@ -38,7 +39,7 @@ Failure signs:
 ### 1.2 Navigation
 
 Action:
-- Visit `Talk`, `Channels`, `MCP`, `Skills`, `Schedules`, `Settings`.
+- Visit `Home`, `Talk`, `Channels`, `Skills`, `MCP`, `Schedules`, `Settings`, `Logs`, `Diagnostics`.
 
 Expected:
 - Each tab renders without layout breakage.
@@ -56,6 +57,19 @@ Expected:
 - The configured name appears in the app chrome where identity is shown.
 - The persona text persists after reload.
 - The engine restarts cleanly with the updated identity state.
+
+### 1.4 Diagnostics surface
+
+Action:
+- Open `Diagnostics`.
+- Confirm daemon resources and recent daemon events render.
+- Use the event file action if available.
+
+Expected:
+- `Diagnostics` shows structured daemon resources rather than run logs.
+- At least `gateway`, `channel`, and `memory` resources are visible when the engine is online.
+- Recent daemon events load without UI breakage.
+- Opening the event file reveals `Filesystem Base Dir/logs/daemon-events.jsonl`.
 
 ## 2. Talk
 
@@ -97,11 +111,28 @@ Failure signs:
 
 Action:
 - Trigger one successful run and one run that stays silent without `speak`.
-- Inspect `GET /v1/run-logs`.
+- Inspect `Logs` and `GET /v1/run-logs`.
 
 Expected:
 - Each run records the prompt, internal summary, spoken messages, and tool events.
 - Silent runs show a `silent_reason` instead of looking like missing data.
+
+### 2.5 Background exec/process
+
+Prompt sequence:
+1. `python으로 10초 동안 1초마다 숫자 출력하는 작업을 백그라운드로 돌려줘. session_id도 알려줘`
+2. `좀아까 시킨거 어떻게 됐어?`
+3. `아까 백그라운드 작업 로그 보여줘`
+
+Expected:
+- The first run uses `exec` and returns a `session_id`.
+- A later run uses `process` to report status or completion.
+- Log output can be retrieved after completion.
+
+Failure signs:
+- The long-running task blocks the whole conversation until completion.
+- No `session_id` is returned for an obviously long task.
+- `process` cannot find the earlier session in the same conversation flow.
 
 ## 3. Slack
 
@@ -212,17 +243,6 @@ Expected:
 - A new skill folder is created under `Filesystem Base Dir/skills`.
 - The new skill appears in the `Skills` tab after refresh or next run.
 
-### 6.2 Memory index flow
-
-Prompt sequence:
-1. `우리 팀 색상 규칙은 navy와 white야. 기억해줘`
-2. `내 메모리 인덱스에서 팀 색상 규칙 관련 항목 찾아줘`
-
-Expected:
-- The first run can use `memory_save` or explicit memory file work.
-- The second run prefers the memory index path instead of manually browsing raw files first.
-- If the agent edits a memory file directly, the index is updated afterward.
-
 ## 6. Memory
 
 ### 6.1 Save and retrieve
@@ -234,6 +254,17 @@ Prompt sequence:
 
 Expected:
 - The new session can recall the rule from long-term memory.
+
+### 6.2 Memory index flow
+
+Prompt sequence:
+1. `우리 팀 색상 규칙은 navy와 white야. 기억해줘`
+2. `내 메모리 인덱스에서 팀 색상 규칙 관련 항목 찾아줘`
+
+Expected:
+- The first run can use `memory_save` or explicit memory file work.
+- The second run prefers the memory index path instead of manually browsing raw files first.
+- If the agent edits a memory file directly, the index is updated afterward.
 
 ## 7. Schedules
 

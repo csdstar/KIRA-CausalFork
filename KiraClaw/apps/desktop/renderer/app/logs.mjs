@@ -220,10 +220,27 @@ function stateClassForStatus(value) {
   if (["running", "online", "ready", "completed", "loaded", "connected"].includes(text)) {
     return "online";
   }
-  if (["failed", "offline", "stopped", "error", "disconnected"].includes(text)) {
+  if (
+    [
+      "failed",
+      "offline",
+      "stopped",
+      "error",
+      "disconnected",
+      "disabled",
+      "not_configured",
+      "pending",
+      "idle",
+      "waiting",
+      "warning",
+      "info",
+      "starting",
+      "stopping",
+    ].includes(text)
+  ) {
     return "offline";
   }
-  return text ? "running" : "";
+  return text ? "offline" : "";
 }
 
 function summarizeResourceData(value) {

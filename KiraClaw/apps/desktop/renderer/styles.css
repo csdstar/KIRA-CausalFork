@@ -313,18 +313,18 @@ select {
 }
 
 .status-chip.running {
-  color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.34);
+  color: var(--danger);
+  border-color: rgba(138, 143, 152, 0.34);
 }
 
 .status-chip.info {
-  color: var(--muted-strong);
-  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--danger);
+  border-color: rgba(138, 143, 152, 0.34);
 }
 
 .status-chip.warning {
-  color: var(--accent-bright);
-  border-color: rgba(var(--accent-rgb), 0.26);
+  color: var(--danger);
+  border-color: rgba(138, 143, 152, 0.34);
 }
 
 .content {
@@ -1344,6 +1344,7 @@ button:disabled {
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+  color: var(--text);
 }
 
 .form-select {
@@ -1740,6 +1741,9 @@ button:disabled {
   text-align: left;
   cursor: pointer;
   appearance: none;
+  color: var(--text);
+  background:
+    linear-gradient(180deg, rgba(17, 22, 30, 0.96), rgba(13, 17, 23, 0.98));
   transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
 }
 

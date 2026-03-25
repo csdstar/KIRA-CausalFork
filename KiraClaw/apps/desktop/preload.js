@@ -52,6 +52,9 @@ contextBridge.exposeInMainWorld("kiraclaw", {
   openExternal(url) {
     return ipcRenderer.invoke("open-external", url);
   },
+  resetAuthState(service, options = {}) {
+    return ipcRenderer.invoke("reset-auth-state", service, options);
+  },
   startDaemon() {
     return ipcRenderer.invoke("start-daemon");
   },

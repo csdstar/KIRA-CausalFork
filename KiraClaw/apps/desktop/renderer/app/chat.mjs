@@ -4,6 +4,7 @@ import { byId, escapeHtml } from "./dom.mjs";
 import { t } from "./i18n.mjs";
 
 let chatBusy = false;
+const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)]/g;
 const FILE_PATH_PATTERN = /(~[\\/][^\s<>"']*|[A-Za-z]:[\\/][^\s<>"']*|\/(?:Users|tmp|private|var|Volumes|opt|Applications|Library)[^\s<>"']*)/g;
 
 export function clearChatThread(state) {
@@ -118,16 +119,43 @@ function renderTerminalText(text) {
 }
 
 function renderTerminalLine(line) {
-  let lastIndex = 0;
-  let html = "";
+  const matches = [];
+  URL_PATTERN.lastIndex = 0;
   FILE_PATH_PATTERN.lastIndex = 0;
 
+  for (const match of line.matchAll(URL_PATTERN)) {
+    matches.push({
+      index: match.index ?? 0,
+      text: match[0],
+      type: "url",
+    });
+  }
+
   for (const match of line.matchAll(FILE_PATH_PATTERN)) {
-    const [fullMatch] = match;
-    const matchIndex = match.index ?? 0;
-    html += escapeHtml(line.slice(lastIndex, matchIndex));
-    html += `<button type="button" class="terminal-path-link" data-open-path="${escapeHtml(fullMatch)}">${escapeHtml(fullMatch)}</button>`;
-    lastIndex = matchIndex + fullMatch.length;
+    matches.push({
+      index: match.index ?? 0,
+      text: match[0],
+      type: "path",
+    });
+  }
+
+  matches.sort((left, right) => left.index - right.index || right.text.length - left.text.length);
+
+  let lastIndex = 0;
+  let html = "";
+  for (const match of matches) {
+    const matchEnd = match.index + match.text.length;
+    if (match.index < lastIndex) {
+      continue;
+    }
+
+    html += escapeHtml(line.slice(lastIndex, match.index));
+    if (match.type === "url") {
+      html += `<button type="button" class="terminal-path-link" data-open-external="${escapeHtml(match.text)}">${escapeHtml(match.text)}</button>`;
+    } else {
+      html += `<button type="button" class="terminal-path-link" data-open-path="${escapeHtml(match.text)}">${escapeHtml(match.text)}</button>`;
+    }
+    lastIndex = matchEnd;
   }
 
   html += escapeHtml(line.slice(lastIndex));
@@ -268,18 +296,29 @@ export function bindChatActions({ api, state, onAfterSend }) {
   byId("clear-chat")?.addEventListener("click", () => clearChatThread(state));
   byId("send-chat")?.addEventListener("click", () => sendChat({ api, state, onAfterSend }));
   thread?.addEventListener("click", async (event) => {
-    const target = event.target.closest("[data-open-path]");
-    if (!target) {
+    const pathTarget = event.target.closest("[data-open-path]");
+    if (pathTarget) {
+      const targetPath = pathTarget.getAttribute("data-open-path");
+      if (!targetPath) {
+        return;
+      }
+      event.preventDefault();
+      await api.openPath(targetPath);
       return;
     }
 
-    const targetPath = target.getAttribute("data-open-path");
-    if (!targetPath) {
+    const externalTarget = event.target.closest("[data-open-external]");
+    if (!externalTarget) {
+      return;
+    }
+
+    const targetUrl = externalTarget.getAttribute("data-open-external");
+    if (!targetUrl) {
       return;
     }
 
     event.preventDefault();
-    await api.openPath(targetPath);
+    await api.openExternal(targetUrl);
   });
 
   input?.addEventListener("compositionstart", () => {

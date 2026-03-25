@@ -18,6 +18,10 @@ let runLogPollTimer = null;
 let updaterPollTimer = null;
 let desktopMessagePollTimer = null;
 
+function isEngineOnline() {
+  return Boolean(state.runtime) || Boolean(state.daemonStatus?.running);
+}
+
 function syncSlackRetrieveConnectState() {
   const connectButton = byId("connect-slack-retrieve");
   const connectHint = byId("slack-retrieve-connect-hint");
@@ -25,7 +29,7 @@ function syncSlackRetrieveConnectState() {
     return;
   }
 
-  const engineOnline = Boolean(state.runtime) || Boolean(state.daemonStatus?.running);
+  const engineOnline = isEngineOnline();
   connectButton.disabled = !engineOnline;
   connectButton.setAttribute("aria-disabled", String(connectButton.disabled));
 
@@ -52,6 +56,77 @@ function rerenderLanguageSensitiveViews() {
   const chatThread = byId("chat-thread");
   if (chatThread && chatThread.querySelectorAll(".terminal-entry").length <= 1) {
     clearChatThread(state);
+  }
+}
+
+function authServiceLabel(service) {
+  if (service === "slack-retrieve") {
+    return t("mcp.slackRetrieveTitle");
+  }
+  if (service === "ms365") {
+    return "Microsoft 365";
+  }
+  if (service === "atlassian") {
+    return "Atlassian";
+  }
+  return service;
+}
+
+function authResetOptions(service) {
+  if (service !== "atlassian") {
+    return {};
+  }
+  return {
+    confluenceSiteUrl: state.config.ATLASSIAN_CONFLUENCE_SITE_URL || "",
+    jiraSiteUrl: state.config.ATLASSIAN_JIRA_SITE_URL || "",
+  };
+}
+
+async function resetAuthState(service) {
+  const serviceLabel = authServiceLabel(service);
+  setSettingsStatus(t("status.resettingLogin", { service: serviceLabel }));
+
+  try {
+    const result = await api.resetAuthState(service, authResetOptions(service));
+    await loadConfig();
+
+    const note = result.hasSystemCacheNote ? t("status.ms365SystemCacheNote") : "";
+
+    setEngineAction({
+      action: "restart",
+      busy: true,
+      message: t("status.loginResetBannerRestarting"),
+      tone: "progress",
+      visible: true,
+    });
+    setSettingsStatus(t("status.loginResetRestarting", { service: serviceLabel }));
+    await refreshRuntime();
+
+    const restartResult = await api.restartDaemon();
+    const restartMessage = restartResult.success
+      ? t("status.loginResetRestarted", { service: serviceLabel })
+      : t("status.loginResetRestartFailed", { service: serviceLabel });
+    const restartBannerMessage = restartResult.success
+      ? t("status.loginResetBannerRestarted")
+      : t("status.loginResetBannerRestartFailed");
+    const finalStatusMessage = restartResult.message || restartMessage;
+
+    setEngineAction({
+      action: "restart",
+      busy: false,
+      message: restartBannerMessage,
+      tone: restartResult.success ? "success" : "error",
+      visible: true,
+    });
+    setSettingsStatus(
+      note
+        ? `${finalStatusMessage} ${note}`
+        : finalStatusMessage,
+    );
+    await refreshRuntime();
+    scheduleEngineActionClear();
+  } catch (error) {
+    setSettingsStatus(t("status.loginResetFailed", { service: serviceLabel, message: error.message }));
   }
 }
 
@@ -578,7 +653,7 @@ function bindActions() {
   });
   document.getElementById("connect-slack-retrieve")?.addEventListener("click", async () => {
     try {
-      const engineOnline = Boolean(state.runtime) || Boolean(state.daemonStatus?.running);
+      const engineOnline = isEngineOnline();
       if (!engineOnline) {
         setSettingsStatus(t("status.slackRetrieveStartEngineFirst"));
         syncSlackRetrieveConnectState();
@@ -606,6 +681,15 @@ function bindActions() {
     } catch (error) {
       setSettingsStatus(error.message);
     }
+  });
+  document.getElementById("reset-slack-retrieve-auth")?.addEventListener("click", () => {
+    resetAuthState("slack-retrieve").catch(() => {});
+  });
+  document.getElementById("reset-ms365-auth")?.addEventListener("click", () => {
+    resetAuthState("ms365").catch(() => {});
+  });
+  document.getElementById("reset-atlassian-auth")?.addEventListener("click", () => {
+    resetAuthState("atlassian").catch(() => {});
   });
   bindChatActions({
     api,

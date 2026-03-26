@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from kiraclaw_agentd.observer_service import ObserverDecision, ObserverService
+
+logger = logging.getLogger(__name__)
+
+
+async def maybe_route_inflight_message(
+    session_manager: Any,
+    observer_service: ObserverService | None,
+    *,
+    session_id: str,
+    prompt: str,
+) -> ObserverDecision | None:
+    if observer_service is None:
+        return None
+
+    has_active_run = getattr(session_manager, "has_active_run", None)
+    build_snapshot = getattr(session_manager, "build_observer_snapshot", None)
+    if not callable(has_active_run) or not callable(build_snapshot):
+        return None
+    if not has_active_run(session_id):
+        return None
+
+    snapshot = build_snapshot(session_id)
+    if not snapshot:
+        return None
+
+    return await asyncio.to_thread(observer_service.classify_inflight, prompt, snapshot)
+
+
+async def run_heartbeat_loop(
+    session_manager: Any,
+    observer_service: ObserverService | None,
+    *,
+    session_id: str,
+    run_task: asyncio.Task[Any],
+    send_update: Callable[[str], Awaitable[None]],
+    initial_delay_seconds: float,
+    interval_seconds: float,
+) -> None:
+    if observer_service is None:
+        return
+
+    build_snapshot = getattr(session_manager, "build_observer_snapshot", None)
+    if not callable(build_snapshot):
+        return
+
+    await asyncio.sleep(max(0.0, float(initial_delay_seconds)))
+    last_message = ""
+    while not run_task.done():
+        snapshot = build_snapshot(session_id)
+        if snapshot:
+            try:
+                message = await asyncio.to_thread(observer_service.summarize_heartbeat, snapshot)
+                text = str(message or "").strip()
+                if run_task.done():
+                    break
+                if text and text != last_message:
+                    await send_update(text)
+                    last_message = text
+            except Exception as exc:  # pragma: no cover - defensive runtime logging
+                logger.warning("Observer heartbeat generation failed for %s: %s", session_id, exc)
+
+        await asyncio.sleep(max(1.0, float(interval_seconds)))
+
+
+async def cancel_heartbeat_task(task: asyncio.Task[None] | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task

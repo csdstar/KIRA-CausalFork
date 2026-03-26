@@ -12,6 +12,12 @@ from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
 from kiraclaw_agentd.channel_debounce import KeyedDebouncer
+from kiraclaw_agentd.observer_runtime import (
+    cancel_heartbeat_task,
+    maybe_route_inflight_message,
+    run_heartbeat_loop,
+)
+from kiraclaw_agentd.observer_service import ObserverService
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
 from kiraclaw_agentd.tool_event_summary import append_tool_summary
@@ -228,10 +234,12 @@ class SlackGateway:
         session_manager: SessionManager,
         settings: KiraClawSettings,
         *,
+        observer_service: ObserverService | None = None,
         debounce_seconds: float = _CHANNEL_DEBOUNCE_SECONDS,
     ) -> None:
         self.session_manager = session_manager
         self.settings = settings
+        self.observer_service = observer_service
         self.app: AsyncApp | None = None
         self.handler: AsyncSocketModeHandler | None = None
         self._runner_task: asyncio.Task[None] | None = None
@@ -453,6 +461,15 @@ class SlackGateway:
             _is_dm(event),
         )
 
+        if await self._maybe_handle_inflight_event(
+            session_id=session_id,
+            prompt=prompt,
+            channel=channel,
+            reply_thread_ts=reply_thread_ts,
+            client=client,
+        ):
+            return
+
         await self._debouncer.enqueue(
             _debounce_key_for_event(session_id, event, user),
             _BufferedSlackEvent(
@@ -540,13 +557,57 @@ class SlackGateway:
             )
         else:
             context_prefix = _merge_context_prefix(delivery_context, reference_context)
-        record = await self.session_manager.run(
+        has_active_run = getattr(self.session_manager, "has_active_run", None)
+        start_heartbeat = not has_active_run(session_id) if callable(has_active_run) else True
+        run_task = asyncio.create_task(
+            self.session_manager.run(
+                session_id=session_id,
+                prompt=prompt,
+                context_prefix=context_prefix,
+                metadata=metadata,
+            )
+        )
+        heartbeat_task: asyncio.Task[None] | None = None
+        if start_heartbeat and self.settings.observer_enabled and self.observer_service is not None:
+            heartbeat_task = asyncio.create_task(
+                run_heartbeat_loop(
+                    self.session_manager,
+                    self.observer_service,
+                    session_id=session_id,
+                    run_task=run_task,
+                    send_update=lambda text: client.chat_postMessage(channel=channel, thread_ts=reply_thread_ts, text=text),
+                    initial_delay_seconds=self.settings.observer_heartbeat_initial_seconds,
+                    interval_seconds=self.settings.observer_heartbeat_interval_seconds,
+                )
+            )
+        try:
+            record = await run_task
+        finally:
+            await cancel_heartbeat_task(heartbeat_task)
+        await self._publish_result(client, channel, reply_thread_ts, record)
+
+    async def _maybe_handle_inflight_event(
+        self,
+        *,
+        session_id: str,
+        prompt: str,
+        channel: str,
+        reply_thread_ts: str | None,
+        client,
+    ) -> bool:
+        decision = await maybe_route_inflight_message(
+            self.session_manager,
+            self.observer_service if self.settings.observer_enabled else None,
             session_id=session_id,
             prompt=prompt,
-            context_prefix=context_prefix,
-            metadata=metadata,
         )
-        await self._publish_result(client, channel, reply_thread_ts, record)
+        if decision is None:
+            return False
+
+        if decision.reply_text:
+            await client.chat_postMessage(channel=channel, thread_ts=reply_thread_ts, text=decision.reply_text)
+
+        return decision.intent in {"status_query", "unsupported_control"}
 
     async def _publish_result(self, client, channel: str, thread_ts: str | None, record: RunRecord) -> None:
         if record.state == "failed":

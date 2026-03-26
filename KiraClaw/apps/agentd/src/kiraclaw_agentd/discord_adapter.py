@@ -11,6 +11,12 @@ from typing import Any
 import aiohttp
 
 from kiraclaw_agentd.channel_debounce import KeyedDebouncer
+from kiraclaw_agentd.observer_runtime import (
+    cancel_heartbeat_task,
+    maybe_route_inflight_message,
+    run_heartbeat_loop,
+)
+from kiraclaw_agentd.observer_service import ObserverService
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
 from kiraclaw_agentd.tool_event_summary import append_tool_summary
@@ -277,10 +283,12 @@ class DiscordGateway:
         session_manager: SessionManager,
         settings: KiraClawSettings,
         *,
+        observer_service: ObserverService | None = None,
         debounce_seconds: float = _CHANNEL_DEBOUNCE_SECONDS,
     ) -> None:
         self.session_manager = session_manager
         self.settings = settings
+        self.observer_service = observer_service
         self.state: str = "not_configured"
         self.last_error: str | None = None
         self.identity: dict[str, str | int] = {}
@@ -427,6 +435,13 @@ class DiscordGateway:
         session_id = _session_id_from_message(message)
         channel_id = getattr(getattr(message, "channel", None), "id", "unknown")
         reply_to_message_id = _reply_to_message_id(message)
+        if await self._maybe_handle_inflight_message(
+            session_id=session_id,
+            prompt=prompt,
+            channel_id=channel_id,
+            reply_to_message_id=reply_to_message_id,
+        ):
+            return
         await self._debouncer.enqueue(
             _debounce_key_for_message(session_id, message),
             _BufferedDiscordMessage(
@@ -482,13 +497,56 @@ class DiscordGateway:
                     "Do not claim you saw earlier channel or thread messages unless you actually retrieved them."
                 )
             context_prefix = _merge_context_prefix(delivery_context, bootstrap_context, history_warning)
-        record = await self.session_manager.run(
+        has_active_run = getattr(self.session_manager, "has_active_run", None)
+        start_heartbeat = not has_active_run(session_id) if callable(has_active_run) else True
+        run_task = asyncio.create_task(
+            self.session_manager.run(
+                session_id=session_id,
+                prompt=prompt,
+                context_prefix=context_prefix,
+                metadata=metadata,
+            )
+        )
+        heartbeat_task: asyncio.Task[None] | None = None
+        if start_heartbeat and self.settings.observer_enabled and self.observer_service is not None:
+            heartbeat_task = asyncio.create_task(
+                run_heartbeat_loop(
+                    self.session_manager,
+                    self.observer_service,
+                    session_id=session_id,
+                    run_task=run_task,
+                    send_update=lambda text: self.send_message(channel_id, text, reply_to_message_id=reply_to_message_id),
+                    initial_delay_seconds=self.settings.observer_heartbeat_initial_seconds,
+                    interval_seconds=self.settings.observer_heartbeat_interval_seconds,
+                )
+            )
+        try:
+            record = await run_task
+        finally:
+            await cancel_heartbeat_task(heartbeat_task)
+        await self._publish_result(channel_id, reply_to_message_id, record)
+
+    async def _maybe_handle_inflight_message(
+        self,
+        *,
+        session_id: str,
+        prompt: str,
+        channel_id: int | str,
+        reply_to_message_id: int | None,
+    ) -> bool:
+        decision = await maybe_route_inflight_message(
+            self.session_manager,
+            self.observer_service if self.settings.observer_enabled else None,
             session_id=session_id,
             prompt=prompt,
-            context_prefix=context_prefix,
-            metadata=metadata,
         )
-        await self._publish_result(channel_id, reply_to_message_id, record)
+        if decision is None:
+            return False
+
+        if decision.reply_text:
+            await self.send_message(channel_id, decision.reply_text, reply_to_message_id=reply_to_message_id)
+
+        return decision.intent in {"status_query", "unsupported_control"}
 
     async def _build_discord_bootstrap_context(self, message: Any) -> str | None:
         try:

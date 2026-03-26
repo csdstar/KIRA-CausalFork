@@ -107,6 +107,18 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_timestamp(value: str | None) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 def _external_response_text(record: RunRecord) -> str:
     result = record.result
     if result is None:
@@ -452,6 +464,63 @@ class SessionManager:
         await self._observe_record(record)
         return record
 
+    def has_active_run(self, session_id: str) -> bool:
+        return self._find_inflight_record(session_id) is not None
+
+    def build_observer_snapshot(
+        self,
+        session_id: str,
+        *,
+        stream_chars: int = 800,
+        tool_event_limit: int = 6,
+        process_tail_chars: int = 240,
+    ) -> dict[str, Any] | None:
+        record = self._find_inflight_record(session_id)
+        if record is None:
+            return None
+
+        lane = self._lanes.get(session_id)
+        result = record.result
+        now = datetime.now(timezone.utc)
+        reference_at = _parse_timestamp(record.started_at) or _parse_timestamp(record.created_at) or now
+        elapsed_seconds = max(0, int((now - reference_at).total_seconds()))
+
+        recent_tool_events: list[dict[str, Any]] = []
+        for event in list(result.tool_events if result else [])[-tool_event_limit:]:
+            recent_tool_events.append(
+                {
+                    "phase": str(event.get("phase") or ""),
+                    "name": str(event.get("name") or ""),
+                }
+            )
+
+        active_processes: list[dict[str, Any]] = []
+        process_manager = getattr(self.engine, "process_manager", None)
+        if process_manager is not None:
+            try:
+                active_processes = process_manager.list_sessions(
+                    tail_chars=process_tail_chars,
+                    owner_session_id=session_id,
+                )
+            except Exception:
+                active_processes = []
+
+        return {
+            "session_id": session_id,
+            "run_id": record.run_id,
+            "state": record.state,
+            "prompt": record.prompt,
+            "source": str(record.metadata.get("source", "")),
+            "created_at": record.created_at,
+            "started_at": record.started_at,
+            "elapsed_seconds": elapsed_seconds,
+            "queued_runs": lane.queue.qsize() if lane is not None else 0,
+            "streamed_text_tail": str((result.streamed_text if result else "") or "")[-stream_chars:],
+            "recent_tool_events": recent_tool_events,
+            "spoken_messages": list(result.spoken_messages) if result else [],
+            "active_processes": active_processes,
+        }
+
     def list_sessions(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         session_ids = sorted(set(self._records.keys()) | set(self._lanes.keys()))
@@ -479,6 +548,16 @@ class SessionManager:
         for lane in lanes:
             await lane.stop()
         self._lanes.clear()
+
+    def _find_inflight_record(self, session_id: str) -> RunRecord | None:
+        records = self._records.get(session_id, [])
+        for record in reversed(records):
+            if record.state == "running":
+                return record
+        for record in reversed(records):
+            if record.state == "queued":
+                return record
+        return None
 
 
 def _clip_conversation_text(text: str) -> str:

@@ -135,6 +135,18 @@ class _FakeSessionManager:
         )
 
 
+class _FakeObserverService:
+    def classify_inflight(self, prompt: str, snapshot: dict) -> object:
+        from kiraclaw_agentd.observer_service import ObserverDecision
+
+        if "어디까지" in prompt:
+            return ObserverDecision("status_query", "지금 상태를 확인 중입니다.")
+        return ObserverDecision("queue_next", "끝난 뒤 이어서 처리할게요.")
+
+    def summarize_heartbeat(self, snapshot: dict) -> str:
+        return "아직 작업 중입니다."
+
+
 def test_build_slack_bootstrap_context_formats_recent_dm_history(tmp_path) -> None:
     async def scenario() -> None:
         settings = KiraClawSettings(
@@ -158,6 +170,182 @@ def test_build_slack_bootstrap_context_formats_recent_dm_history(tmp_path) -> No
         assert lines[1] == "Jiho Jeon: first question"
         assert lines[2] == "KIRA: previous answer"
         assert lines[3] == "Alice: second question"
+
+    asyncio.run(scenario())
+
+
+def test_slack_inflight_status_query_is_answered_without_queueing(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+        )
+        session_manager = _FakeSessionManager()
+        session_manager.has_active_run = lambda session_id: True  # type: ignore[attr-defined]
+        session_manager.build_observer_snapshot = lambda session_id: {  # type: ignore[attr-defined]
+            "session_id": session_id,
+            "state": "running",
+            "prompt": "작업 중",
+            "elapsed_seconds": 5,
+            "recent_tool_events": [],
+            "active_processes": [],
+        }
+        gateway = SlackGateway(session_manager, settings, observer_service=_FakeObserverService())
+        client = _FakeSlackClient()
+
+        handled = await gateway._maybe_handle_inflight_event(
+            session_id="slack:C1:main",
+            prompt="지금 어디까지 했어?",
+            channel="C1",
+            reply_thread_ts="111.222",
+            client=client,
+        )
+
+        assert handled is True
+        assert session_manager.calls == []
+        assert client.sent_messages == [
+            {"channel": "C1", "text": "지금 상태를 확인 중입니다.", "thread_ts": "111.222"}
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_slack_run_for_event_emits_heartbeat_before_final_reply(tmp_path) -> None:
+    class _SlowSessionManager(_FakeSessionManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self._running = False
+
+        def has_active_run(self, session_id: str) -> bool:
+            return self._running
+
+        def build_observer_snapshot(self, session_id: str) -> dict | None:
+            if not self._running:
+                return None
+            return {
+                "session_id": session_id,
+                "state": "running",
+                "prompt": "브라우저 확인 중",
+                "elapsed_seconds": 12,
+                "recent_tool_events": [{"phase": "start", "name": "browser_navigate"}],
+                "active_processes": [],
+            }
+
+        async def run(self, **kwargs) -> RunRecord:
+            self._running = True
+            self.calls.append(kwargs)
+            await asyncio.sleep(0.05)
+            self._running = False
+            return RunRecord(
+                run_id="run-1",
+                session_id=kwargs["session_id"],
+                state="completed",
+                prompt=kwargs["prompt"],
+                created_at="2026-01-01T00:00:00Z",
+                finished_at="2026-01-01T00:00:01Z",
+                result=RunResult(final_response="internal ok", streamed_text="ok", spoken_messages=["ok"]),
+                metadata=kwargs.get("metadata", {}),
+            )
+
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            observer_heartbeat_initial_seconds=0.01,
+            observer_heartbeat_interval_seconds=0.02,
+        )
+        session_manager = _SlowSessionManager()
+        gateway = SlackGateway(session_manager, settings, observer_service=_FakeObserverService())
+        gateway.identity = {"user_id": "UBOT"}
+        client = _FakeSlackClient()
+
+        await gateway._run_for_event(
+            event={"channel": "C1", "channel_type": "channel", "ts": "111.222"},
+            session_id="slack:C1:main",
+            channel="C1",
+            reply_thread_ts="111.222",
+            user="U1",
+            user_name="Jiho Jeon",
+            prompt="hello",
+            mention=False,
+            client=client,
+        )
+
+        assert len(client.sent_messages) >= 2
+        assert client.sent_messages[0]["text"] == "아직 작업 중입니다."
+        assert client.sent_messages[-1]["text"] == "ok"
+
+    asyncio.run(scenario())
+
+
+def test_slack_queued_followup_does_not_start_duplicate_heartbeat(tmp_path) -> None:
+    class _QueuedSessionManager(_FakeSessionManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self._running = True
+            self.snapshot_calls = 0
+
+        def has_active_run(self, session_id: str) -> bool:
+            return self._running
+
+        def build_observer_snapshot(self, session_id: str) -> dict | None:
+            self.snapshot_calls += 1
+            return {
+                "session_id": session_id,
+                "state": "running",
+                "prompt": "이미 진행 중인 작업",
+                "elapsed_seconds": 20,
+                "recent_tool_events": [{"phase": "start", "name": "exec"}],
+                "active_processes": [],
+            }
+
+        async def run(self, **kwargs) -> RunRecord:
+            self.calls.append(kwargs)
+            await asyncio.sleep(0.03)
+            return RunRecord(
+                run_id="run-2",
+                session_id=kwargs["session_id"],
+                state="completed",
+                prompt=kwargs["prompt"],
+                created_at="2026-01-01T00:00:00Z",
+                finished_at="2026-01-01T00:00:01Z",
+                result=RunResult(final_response="internal ok", streamed_text="ok", spoken_messages=["queued ok"]),
+                metadata=kwargs.get("metadata", {}),
+            )
+
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            observer_heartbeat_initial_seconds=0.01,
+            observer_heartbeat_interval_seconds=0.02,
+        )
+        session_manager = _QueuedSessionManager()
+        gateway = SlackGateway(session_manager, settings, observer_service=_FakeObserverService())
+        client = _FakeSlackClient()
+
+        await gateway._run_for_event(
+            event={"channel": "C1", "channel_type": "channel", "ts": "222.333"},
+            session_id="slack:C1:main",
+            channel="C1",
+            reply_thread_ts="222.333",
+            user="U1",
+            user_name="Jiho Jeon",
+            prompt="다음엔 이것도 해줘",
+            mention=False,
+            client=client,
+        )
+
+        assert session_manager.snapshot_calls == 0
+        assert client.sent_messages == [
+            {"channel": "C1", "text": "queued ok", "thread_ts": "222.333"}
+        ]
 
     asyncio.run(scenario())
 

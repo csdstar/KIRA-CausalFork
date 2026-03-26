@@ -93,6 +93,54 @@ def test_session_manager_caps_record_history_per_session(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_session_manager_builds_observer_snapshot_for_running_record(tmp_path) -> None:
+    class SlowEngine:
+        def __init__(self, settings: KiraClawSettings) -> None:
+            self.settings = settings
+            self.process_manager = None
+
+        def run(
+            self,
+            prompt: str,
+            provider: str | None = None,
+            model: str | None = None,
+            conversation_context: str | None = None,
+            memory_context: str | None = None,
+            tool_context: dict | None = None,
+            live_result: RunResult | None = None,
+        ) -> RunResult:
+            assert live_result is not None
+            live_result.streamed_text = "checking browser state"
+            live_result.tool_events.append({"phase": "start", "name": "browser_navigate"})
+            import time
+
+            time.sleep(0.15)
+            return RunResult(final_response="done", streamed_text="done")
+
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+        )
+        manager = SessionManager(SlowEngine(settings))
+        task = asyncio.create_task(manager.run("slack:C1:main", "브라우저로 확인해줘"))
+        await asyncio.sleep(0.03)
+
+        snapshot = manager.build_observer_snapshot("slack:C1:main")
+
+        assert snapshot is not None
+        assert snapshot["state"] in {"queued", "running"}
+        assert snapshot["prompt"] == "브라우저로 확인해줘"
+        assert "browser_navigate" in [event["name"] for event in snapshot["recent_tool_events"]]
+        assert "checking browser state" in snapshot["streamed_text_tail"]
+
+        await task
+
+    asyncio.run(scenario())
+
+
 def test_session_manager_releases_idle_lane_but_keeps_records(tmp_path) -> None:
     async def scenario() -> None:
         settings = KiraClawSettings(

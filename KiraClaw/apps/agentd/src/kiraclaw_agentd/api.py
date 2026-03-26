@@ -17,6 +17,7 @@ from kiraclaw_agentd.desktop_delivery import DesktopDelivery
 from kiraclaw_agentd.discord_adapter import DiscordGateway
 from kiraclaw_agentd.engine import KiraClawEngine, RunResult, list_available_skills
 from kiraclaw_agentd.memory_runtime import MemoryRuntime
+from kiraclaw_agentd.observer_service import ObserverService
 from kiraclaw_agentd.run_log_store import RunLogStore
 from kiraclaw_agentd.schedule_store import read_schedules
 from kiraclaw_agentd.scheduler_runtime import SchedulerRuntime
@@ -234,9 +235,10 @@ def create_app() -> FastAPI:
         on_record_complete=memory_runtime.enqueue_save,
         record_observer=run_log_store.observe,
     )
-    slack_gateway = SlackGateway(session_manager, settings)
-    telegram_gateway = TelegramGateway(session_manager, settings)
-    discord_gateway = DiscordGateway(session_manager, settings)
+    observer_service = ObserverService(settings)
+    slack_gateway = SlackGateway(session_manager, settings, observer_service=observer_service)
+    telegram_gateway = TelegramGateway(session_manager, settings, observer_service=observer_service)
+    discord_gateway = DiscordGateway(session_manager, settings, observer_service=observer_service)
     desktop_delivery = DesktopDelivery()
     channel_delivery = ChannelDelivery(
         slack_gateway=slack_gateway,
@@ -263,6 +265,7 @@ def create_app() -> FastAPI:
     app.state.scheduler_runtime = scheduler_runtime
     app.state.run_log_store = run_log_store
     app.state.daemon_plane = daemon_plane
+    app.state.observer_service = observer_service
     redirect_uri = resolve_slack_retrieve_redirect_uri(
         configured_url=settings.slack_retrieve_redirect_url,
         host=settings.host,

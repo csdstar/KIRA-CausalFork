@@ -1072,3 +1072,33 @@ def test_slack_dm_publish_is_silent_without_speak(tmp_path) -> None:
         assert client.sent_messages == []
 
     asyncio.run(scenario())
+
+
+def test_slack_dm_publish_uses_terminal_fallback_after_max_turns(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+        )
+        gateway = SlackGateway(_FakeSessionManager(), settings)
+        client = _FakeSlackClient()
+        record = RunRecord(
+            run_id="run-1",
+            session_id="slack:dm:D1",
+            state="completed",
+            prompt="hello",
+            created_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            result=RunResult(final_response="최종 정리입니다.", streamed_text="", max_turns_reached=True),
+            metadata={"source": "slack-dm", "is_private": True, "mention": False},
+        )
+
+        await gateway._publish_result(client, "D1", None, record)
+
+        assert client.sent_messages == [
+            {"channel": "D1", "text": "최종 정리입니다.", "thread_ts": None}
+        ]
+
+    asyncio.run(scenario())

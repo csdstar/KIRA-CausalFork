@@ -690,3 +690,44 @@ def test_telegram_dm_publish_is_silent_without_speak(tmp_path) -> None:
         assert sent == []
 
     asyncio.run(scenario())
+
+
+def test_telegram_dm_publish_uses_terminal_fallback_after_max_turns(tmp_path) -> None:
+    async def scenario() -> None:
+        settings = KiraClawSettings(
+            data_dir=tmp_path / "data",
+            workspace_dir=tmp_path / "workspace",
+            home_mode="modern",
+            slack_enabled=False,
+            telegram_enabled=False,
+        )
+        session_manager = _FakeSessionManager()
+        gateway = TelegramGateway(session_manager, settings)
+        sent: list[dict] = []
+
+        async def fake_send(chat_id, text, reply_to_message_id=None):
+            sent.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "reply_to_message_id": reply_to_message_id,
+                }
+            )
+
+        gateway.send_message = fake_send  # type: ignore[method-assign]
+        record = RunRecord(
+            run_id="run-1",
+            session_id="telegram:dm:123",
+            state="completed",
+            prompt="hello",
+            created_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            result=RunResult(final_response="최종 정리입니다.", streamed_text="", max_turns_reached=True),
+            metadata={"source": "telegram-dm", "is_private": True, "mention": False},
+        )
+
+        await gateway._publish_result(123, None, record)
+
+        assert sent == [{"chat_id": 123, "text": "최종 정리입니다.", "reply_to_message_id": None}]
+
+    asyncio.run(scenario())

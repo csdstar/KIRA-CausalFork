@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from kiraclaw_agentd.engine import RunResult
 from kiraclaw_agentd.session_manager import RunRecord
-from kiraclaw_agentd.tool_event_summary import append_response_trace, build_response_trace
+from kiraclaw_agentd.tool_event_summary import (
+    append_response_trace,
+    build_response_trace,
+    build_terminal_fallback_response,
+    should_publish_terminal_fallback,
+)
 
 
 class _FakeProcessManager:
@@ -57,3 +62,29 @@ def test_append_response_trace_appends_below_message() -> None:
     message = append_response_trace("완료했습니다.", _build_record(), process_manager=_FakeProcessManager(), enabled=True)
 
     assert message.startswith("완료했습니다.\n\nUsed: exec, read")
+
+
+def test_terminal_fallback_requires_terminal_guard_and_direct_address() -> None:
+    record = _build_record()
+    record.result.spoken_messages = []
+    record.result.submitted = False
+    record.result.max_turns_reached = True
+    record.metadata = {"source": "slack-group", "mention": False, "is_private": False}
+
+    assert should_publish_terminal_fallback(record) is False
+
+    record.metadata["mention"] = True
+    assert should_publish_terminal_fallback(record) is True
+
+
+def test_build_terminal_fallback_response_uses_final_response_and_trace() -> None:
+    record = _build_record()
+    record.result.spoken_messages = []
+    record.result.final_response = "최종 정리입니다."
+    record.result.submitted = False
+    record.result.max_turns_reached = True
+    record.metadata = {"source": "slack-dm", "mention": False, "is_private": True}
+
+    message = build_terminal_fallback_response(record, process_manager=_FakeProcessManager(), enabled=True)
+
+    assert message.startswith("최종 정리입니다.\n\nUsed: exec, read")

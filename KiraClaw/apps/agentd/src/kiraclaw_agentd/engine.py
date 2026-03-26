@@ -31,6 +31,9 @@ class RunResult:
     tool_events: list[dict] = field(default_factory=list)
     spoken_messages: list[str] = field(default_factory=list)
     trace_events: list[dict] = field(default_factory=list)
+    submitted: bool = False
+    max_turns_reached: bool = False
+    doom_loop_hard_stop: bool = False
 
     @property
     def internal_summary(self) -> str:
@@ -70,6 +73,23 @@ class CapturingEventHandler(NullEventHandler):
             if self.live_result is not None:
                 self.live_result.final_response = str(error)
             self.trace_events.append({"type": "error", "error": str(error), "at": _event_timestamp()})
+            return
+        if event.type == EventType.MAX_TURNS:
+            if self.live_result is not None:
+                self.live_result.max_turns_reached = True
+            self.trace_events.append({"type": "max_turns", "at": _event_timestamp(), "data": dict(event.data or {})})
+            return
+        if event.type == EventType.DOOM_LOOP:
+            recovery_count = int(event.data.get("recovery_count") or 0)
+            if self.live_result is not None and recovery_count >= 2:
+                self.live_result.doom_loop_hard_stop = True
+            self.trace_events.append(
+                {
+                    "type": "doom_loop",
+                    "at": _event_timestamp(),
+                    "data": dict(event.data or {}),
+                }
+            )
 
     def on_tool_start(self, name: str, args: dict) -> None:
         self.tool_events.append({"phase": "start", "name": name, "args": args})
@@ -83,6 +103,7 @@ class CapturingEventHandler(NullEventHandler):
         self.summary = summary
         if self.live_result is not None:
             self.live_result.final_response = summary
+            self.live_result.submitted = True
         self.trace_events.append({"type": "submit", "text": summary, "at": _event_timestamp()})
 
 
@@ -235,6 +256,9 @@ class KiraClawEngine:
             live_result.tool_events.clear()
             live_result.spoken_messages = spoken_messages
             live_result.trace_events.clear()
+            live_result.submitted = False
+            live_result.max_turns_reached = False
+            live_result.doom_loop_hard_stop = False
         tools, skill_rows = _configure_tools(self.settings, tool_context=run_tool_context)
         tool_names = [tool.name for tool in tools]
         mcp_tools = list(self.mcp_runtime.tools)

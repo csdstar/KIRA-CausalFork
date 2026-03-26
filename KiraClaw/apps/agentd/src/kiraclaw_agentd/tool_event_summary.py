@@ -132,3 +132,30 @@ def append_response_trace(text: str, record: Any, *, process_manager: Any = None
     if not base:
         return summary
     return f"{base}\n\n{summary}"
+
+
+def should_publish_terminal_fallback(record: Any) -> bool:
+    result = getattr(record, "result", None)
+    if result is None:
+        return False
+    if getattr(result, "spoken_messages", None):
+        return False
+    if getattr(result, "submitted", False):
+        return False
+    if not (getattr(result, "max_turns_reached", False) or getattr(result, "doom_loop_hard_stop", False)):
+        return False
+    final_response = str(getattr(result, "final_response", "") or "").strip()
+    if not final_response:
+        return False
+
+    metadata = getattr(record, "metadata", {}) or {}
+    return bool(metadata.get("is_private") or metadata.get("mention"))
+
+
+def build_terminal_fallback_response(record: Any, *, process_manager: Any = None, enabled: bool = True) -> str:
+    if not should_publish_terminal_fallback(record):
+        return ""
+    final_response = str(getattr(getattr(record, "result", None), "final_response", "") or "").strip()
+    if not final_response:
+        return ""
+    return append_response_trace(final_response, record, process_manager=process_manager, enabled=enabled)

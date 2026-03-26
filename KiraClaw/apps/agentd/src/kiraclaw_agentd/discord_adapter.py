@@ -19,7 +19,7 @@ from kiraclaw_agentd.observer_runtime import (
 from kiraclaw_agentd.observer_service import InflightMessageContext, ObserverService
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
-from kiraclaw_agentd.tool_event_summary import append_response_trace
+from kiraclaw_agentd.tool_event_summary import append_response_trace, build_terminal_fallback_response
 
 logger = logging.getLogger(__name__)
 _CHANNEL_DEBOUNCE_SECONDS = 5.0
@@ -604,9 +604,9 @@ class DiscordGateway:
             await self.send_message(channel_id, text, reply_to_message_id=reply_to_message_id)
             return
 
+        process_manager = getattr(getattr(self.session_manager, "engine", None), "process_manager", None)
         spoken_messages = list(record.result.spoken_messages) if record.result else []
         if spoken_messages:
-            process_manager = getattr(getattr(self.session_manager, "engine", None), "process_manager", None)
             rendered_messages = list(spoken_messages)
             rendered_messages[-1] = append_response_trace(
                 rendered_messages[-1],
@@ -616,6 +616,15 @@ class DiscordGateway:
             )
             for text in rendered_messages:
                 await self.send_message(channel_id, text, reply_to_message_id=reply_to_message_id)
+            return
+
+        fallback_text = build_terminal_fallback_response(
+            record,
+            process_manager=process_manager,
+            enabled=self.settings.response_trace_enabled,
+        )
+        if fallback_text:
+            await self.send_message(channel_id, fallback_text, reply_to_message_id=reply_to_message_id)
 
     async def _api(
         self,

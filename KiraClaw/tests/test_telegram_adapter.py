@@ -491,6 +491,7 @@ def test_telegram_publish_result_appends_tool_summary_to_last_spoken_message(tmp
             home_mode="modern",
             slack_enabled=False,
             telegram_enabled=False,
+            response_trace_enabled=True,
         )
         session_manager = _FakeSessionManager()
         gateway = TelegramGateway(session_manager, settings)
@@ -530,7 +531,7 @@ def test_telegram_publish_result_appends_tool_summary_to_last_spoken_message(tmp
 
         assert sent == [
             {"chat_id": -1, "text": "첫번째 말", "reply_to_message_id": 77},
-            {"chat_id": -1, "text": "두번째 말\n\nUsed: read, bash", "reply_to_message_id": 77},
+            {"chat_id": -1, "text": "두번째 말\n\nUsed: read, bash\nElapsed: 1.0s", "reply_to_message_id": 77},
         ]
 
     asyncio.run(scenario())

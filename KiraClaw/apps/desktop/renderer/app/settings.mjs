@@ -120,10 +120,10 @@ function runtimeValueForField(state, field) {
     TELEGRAM_ALLOWED_NAMES: state.runtime.telegram_allowed_names,
     DISCORD_ENABLED: String(Boolean(state.runtime.discord_enabled)),
     DISCORD_ALLOWED_NAMES: state.runtime.discord_allowed_names,
+    RESPONSE_TRACE_ENABLED: String(Boolean(state.runtime.response_trace_enabled)),
     SLACK_RETRIEVE_ENABLED: String(Boolean(state.runtime.slack_retrieve_enabled)),
     SLACK_RETRIEVE_REDIRECT_URL: state.runtime.slack_retrieve_redirect_uri,
     CHROME_ENABLED: String(Boolean(state.runtime.browser_enabled)),
-    CHROME_VISIBLE: String(Boolean(state.runtime.browser_visible)),
     FILESYSTEM_BASE_DIR: state.runtime.workspace_dir,
   };
 
@@ -280,6 +280,7 @@ export function collectSettingsUpdates(state) {
   const remoteServers = collectRemoteMcpServers();
   validateRemoteMcpServers(remoteServers);
   updates.REMOTE_MCP_SERVERS = serializeRemoteMcpServers(remoteServers);
+  updates.CHROME_VISIBLE = "false";
 
   return updates;
 }

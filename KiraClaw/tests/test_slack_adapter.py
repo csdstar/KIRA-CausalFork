@@ -966,6 +966,7 @@ def test_slack_publish_result_appends_tool_summary_to_last_spoken_message(tmp_pa
             workspace_dir=tmp_path / "workspace",
             home_mode="modern",
             slack_enabled=False,
+            response_trace_enabled=True,
         )
         gateway = SlackGateway(_FakeSessionManager(), settings)
         client = _FakeSlackClient()
@@ -993,7 +994,7 @@ def test_slack_publish_result_appends_tool_summary_to_last_spoken_message(tmp_pa
 
         assert client.sent_messages == [
             {"channel": "C1", "text": "첫번째 말", "thread_ts": "111.222"},
-            {"channel": "C1", "text": "두번째 말\n\nUsed: read, bash", "thread_ts": "111.222"},
+            {"channel": "C1", "text": "두번째 말\n\nUsed: read, bash\nElapsed: 1.0s", "thread_ts": "111.222"},
         ]
 
     asyncio.run(scenario())

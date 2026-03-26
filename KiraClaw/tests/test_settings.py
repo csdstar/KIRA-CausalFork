@@ -216,6 +216,31 @@ def test_visible_browser_is_runtime_only_not_legacy_config(tmp_path, monkeypatch
     assert settings.browser_mcp_port == 45679
 
 
+def test_response_trace_enabled_can_be_backfilled_from_legacy_config(tmp_path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    _write_legacy_state(home, workspace)
+
+    legacy_config = home / ".kira" / "config.env"
+    legacy_config.write_text(
+        legacy_config.read_text(encoding="utf-8") + '\nRESPONSE_TRACE_ENABLED="false"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("KIRACLAW_RESPONSE_TRACE_ENABLED", raising=False)
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+
+    settings = get_settings()
+    assert settings.response_trace_enabled is False
+
+    monkeypatch.setenv("KIRACLAW_RESPONSE_TRACE_ENABLED", "true")
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.response_trace_enabled is True
+
+
 def test_ensure_directories_seeds_default_skills_without_overwriting(tmp_path) -> None:
     seed_dir = tmp_path / "seed-skills"
     (seed_dir / "pptx").mkdir(parents=True)

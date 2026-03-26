@@ -29,25 +29,17 @@ When Chrome toggle is on, Playwright uses Chrome profile.
 You can reuse already logged-in sessions without logging in each time.
 :::
 
-### 4. Visible Browser (Optional)
-- Turn **"Visible browser"** toggle **ON** if you want Playwright automation to run in a real Chrome window
-- With this option on:
-  - Browser actions are visible on your desktop
-  - The desktop app manages a standalone Playwright MCP server
-  - Existing Chrome profile state is still reused
-
-### 5. Save Settings
+### 4. Save Settings
 - Click **"Save Settings"** button
 
-### 6. Server Start and Initial Setup
+### 5. Server Start and Initial Setup
 
 When you click **"Start"** button:
 
-1. If **Visible browser** is enabled, Chrome opens as part of browser automation
-2. **Manually log in** to required websites (e.g., company SSO, Gmail, etc.)
-3. Login info is saved to Chrome profile
-4. **Close the browser**
-5. The engine reuses the saved profile on future runs
+1. Use **Open Profile Setup** if you need to log in to required websites first (e.g., company SSO, Gmail, etc.)
+2. Login info is saved to Chrome profile
+3. **Close the browser**
+4. The engine reuses the saved profile on future runs
 
 ::: warning Initial Setup Required
 Use **Open Profile Setup** before browser tasks to log in with the same Chrome profile.
@@ -112,12 +104,6 @@ Login info from initial server start is saved to Chrome profile:
 - Auto-maintains login state on next server start
 - No re-login needed when using Computer Use
 - Cookies and session info auto-preserved
-
-### Visible Browser
-When this option is on:
-- **Browser actions are visible while Playwright runs**
-- Useful for debugging and watching what the agent is doing
-- Can make browser automation feel slower or more intrusive than background mode
 
 ---
 

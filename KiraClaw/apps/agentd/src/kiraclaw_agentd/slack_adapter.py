@@ -20,7 +20,7 @@ from kiraclaw_agentd.observer_runtime import (
 from kiraclaw_agentd.observer_service import ObserverService
 from kiraclaw_agentd.session_manager import RunRecord, SessionManager
 from kiraclaw_agentd.settings import KiraClawSettings
-from kiraclaw_agentd.tool_event_summary import append_tool_summary
+from kiraclaw_agentd.tool_event_summary import append_response_trace
 
 logger = logging.getLogger(__name__)
 _APP_MENTION_RE = re.compile(r"<@[^>]+>")
@@ -617,8 +617,14 @@ class SlackGateway:
 
         spoken_messages = list(record.result.spoken_messages) if record.result else []
         if spoken_messages:
+            process_manager = getattr(getattr(self.session_manager, "engine", None), "process_manager", None)
             rendered_messages = list(spoken_messages)
-            rendered_messages[-1] = append_tool_summary(rendered_messages[-1], record.result.tool_events)
+            rendered_messages[-1] = append_response_trace(
+                rendered_messages[-1],
+                record,
+                process_manager=process_manager,
+                enabled=self.settings.response_trace_enabled,
+            )
             for text in rendered_messages:
                 await client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
             return

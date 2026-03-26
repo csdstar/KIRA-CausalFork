@@ -572,90 +572,8 @@ function createDaemonController({
   }
 
   async function ensureVisibleBrowserMcp(config) {
-    if (!parseBoolean(config.CHROME_ENABLED) || !parseBoolean(config.CHROME_VISIBLE)) {
-      await stopBrowserMcp();
-      return { ok: true, port: null };
-    }
-
-    if (browserMcpProcess && browserMcpProcess.exitCode === null && browserMcpPort && await isPortReachable(browserMcpPort)) {
-      return { ok: true, port: browserMcpPort };
-    }
-
     await stopBrowserMcp();
-
-    const npxPath = resolveNpxBinary();
-    if (!npxPath) {
-      return { ok: false, message: "npx is required to run the visible browser MCP server." };
-    }
-
-    const profileDir = resolveChromeProfileDir(config);
-    const outputDir = resolveChromeOutputDir(config);
-    fs.mkdirSync(profileDir, { recursive: true });
-    fs.mkdirSync(outputDir, { recursive: true });
-
-    let port;
-    try {
-      port = await findFreePort();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, message: `Failed to reserve a local port for the visible browser: ${message}` };
-    }
-
-    emit("info", `Starting visible browser MCP on port ${port}...`);
-    const proc = spawn(
-      npxPath,
-      [
-        "-y",
-        "@playwright/mcp@latest",
-        "--browser",
-        "chrome",
-        "--user-data-dir",
-        profileDir,
-        "--output-dir",
-        outputDir,
-        "--port",
-        String(port),
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: process.platform !== "win32",
-      },
-    );
-
-    browserMcpProcess = proc;
-    browserMcpPort = port;
-
-    proc.stdout.on("data", (chunk) => emit("stdout", `[playwright-mcp] ${String(chunk)}`));
-    proc.stderr.on("data", (chunk) => emit("stderr", `[playwright-mcp] ${String(chunk)}`));
-    proc.on("error", (error) => emit("error", `Visible browser MCP failed to start: ${error.message}`));
-    proc.on("exit", (code, signal) => {
-      emit("info", `Visible browser MCP exited (${signal || code || 0}).`);
-      if (browserMcpProcess === proc) {
-        browserMcpProcess = null;
-        browserMcpPort = null;
-      }
-    });
-
-    const ready = await waitUntil(async () => {
-      if (!browserMcpProcess || browserMcpProcess.exitCode !== null) {
-        return false;
-      }
-      return isPortReachable(port, "127.0.0.1", 250);
-    }, { timeoutMs: 15000, intervalMs: 250 });
-
-    if (!ready) {
-      const details = latestLogSummary();
-      await stopBrowserMcp();
-      return {
-        ok: false,
-        message: details
-          ? `Visible browser MCP failed to become ready. ${details}`
-          : "Visible browser MCP failed to become ready.",
-      };
-    }
-
-    emit("info", `Visible browser MCP is ready on port ${port}.`);
-    return { ok: true, port };
+    return { ok: true, port: null };
   }
 
   async function openChromeProfileSetup() {
@@ -727,18 +645,12 @@ function createDaemonController({
     }
 
     const config = parseEnvFile();
-    const wantsVisibleBrowser = parseBoolean(config.CHROME_ENABLED) && parseBoolean(config.CHROME_VISIBLE);
     const browserSpec = await ensureVisibleBrowserMcp(config);
-    let browserWarning = "";
-    if (!browserSpec.ok) {
-      browserWarning = browserSpec.message || "";
-      emit("error", `${browserWarning} Falling back to internal browser MCP mode.`);
-    }
 
     const launchEnvOverrides = {
-      KIRACLAW_BROWSER_VISIBLE: browserSpec.ok && wantsVisibleBrowser ? "true" : "false",
+      KIRACLAW_BROWSER_VISIBLE: "false",
     };
-    if (browserSpec.ok && browserSpec.port) {
+    if (browserSpec.port) {
       launchEnvOverrides.KIRACLAW_BROWSER_MCP_PORT = String(browserSpec.port);
     }
 
@@ -793,7 +705,7 @@ function createDaemonController({
       success: true,
       running: true,
       managed: true,
-      message: browserWarning ? `KIRA Engine started. ${browserWarning}` : "KIRA Engine started.",
+      message: "KIRA Engine started.",
     };
   }
 

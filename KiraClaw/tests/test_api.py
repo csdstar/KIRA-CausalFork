@@ -202,6 +202,23 @@ def test_resources_endpoint_returns_gateway_and_channels(tmp_path: Path, monkeyp
     assert body["counts"]["gateway"] == 1
 
 
+def test_runtime_endpoint_includes_response_trace_setting(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("KIRACLAW_RESPONSE_TRACE_ENABLED", "false")
+    get_settings.cache_clear()
+
+    app = create_app()
+    app.router.on_startup.clear()
+    app.router.on_shutdown.clear()
+
+    with TestClient(app) as client:
+        response = client.get("/v1/runtime")
+
+    assert response.status_code == 200
+    assert response.json()["response_trace_enabled"] is False
+
+
 def test_daemon_events_endpoint_returns_resource_events(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))

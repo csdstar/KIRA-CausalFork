@@ -38,6 +38,27 @@ function syncSlackRetrieveConnectState() {
   }
 }
 
+function responseTraceEnabled() {
+  const configured = state.config.RESPONSE_TRACE_ENABLED;
+  if (configured !== undefined && configured !== null && String(configured).trim() !== "") {
+    return String(configured).trim().toLowerCase() === "true";
+  }
+  return Boolean(state.runtime?.response_trace_enabled);
+}
+
+function renderResponseTraceControl() {
+  const enabled = responseTraceEnabled();
+  const input = byId("RESPONSE_TRACE_ENABLED");
+  const chip = byId("response-trace-chip");
+  if (input) {
+    input.checked = enabled;
+  }
+  if (chip) {
+    chip.className = `status-chip ${enabled ? "online" : "offline"}`;
+    setText(chip, enabled ? t("common.on") : t("common.off"));
+  }
+}
+
 function renderDesktopState() {
   if (!state.settingsDirty) {
     applySettingsToForm(state);
@@ -45,6 +66,7 @@ function renderDesktopState() {
   applyAgentIdentity(state);
   updateHomeStatus(state, state.daemonStatus, state.runtime);
   syncSlackRetrieveConnectState();
+  renderResponseTraceControl();
 }
 
 function rerenderLanguageSensitiveViews() {
@@ -128,6 +150,10 @@ async function resetAuthState(service) {
   } catch (error) {
     setSettingsStatus(t("status.loginResetFailed", { service: serviceLabel, message: error.message }));
   }
+}
+
+function setResponseTraceStatus(message) {
+  setText(byId("response-trace-status"), message);
 }
 
 async function refreshActiveView() {
@@ -500,6 +526,47 @@ async function saveSettings({ restart = false } = {}) {
   }
 }
 
+async function saveResponseTraceSetting(enabled) {
+  const value = String(Boolean(enabled));
+  setResponseTraceStatus(t("diagnostics.responseTraceSaving"));
+
+  try {
+    await api.saveConfig({ RESPONSE_TRACE_ENABLED: value });
+    state.config = { ...state.config, RESPONSE_TRACE_ENABLED: value };
+    state.settingsDirty = false;
+
+    setEngineAction({
+      action: "restart",
+      busy: true,
+      message: t("status.restartingWithNewSettings"),
+      tone: "progress",
+      visible: true,
+    });
+    await refreshRuntime();
+
+    const result = await api.restartDaemon();
+    setEngineAction({
+      action: "restart",
+      busy: false,
+      message: result.success ? t("status.engineRestartedWithNewSettings") : (result.message || t("status.engineRestartFailed")),
+      tone: result.success ? "success" : "error",
+      visible: true,
+    });
+    await refreshRuntime();
+    renderResponseTraceControl();
+    setResponseTraceStatus(
+      result.success
+        ? (enabled ? t("diagnostics.responseTraceEnabledStatus") : t("diagnostics.responseTraceDisabledStatus"))
+        : (result.message || t("status.engineRestartFailed")),
+    );
+    scheduleEngineActionClear();
+  } catch (error) {
+    await loadConfig();
+    await refreshRuntime();
+    setResponseTraceStatus(t("status.saveFailed", { message: error.message }));
+  }
+}
+
 async function runDaemonAction(action) {
   setSettingsStatus(t("status.actionProgress", { action: progressLabelForAction(action) }));
   setEngineAction({
@@ -690,6 +757,10 @@ function bindActions() {
   });
   document.getElementById("reset-atlassian-auth")?.addEventListener("click", () => {
     resetAuthState("atlassian").catch(() => {});
+  });
+  document.getElementById("RESPONSE_TRACE_ENABLED")?.addEventListener("change", (event) => {
+    const enabled = Boolean(event.target?.checked);
+    saveResponseTraceSetting(enabled).catch(() => {});
   });
   bindChatActions({
     api,

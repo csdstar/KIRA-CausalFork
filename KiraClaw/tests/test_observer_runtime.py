@@ -7,13 +7,17 @@ from kiraclaw_agentd.observer_service import ObserverDecision
 
 
 class _FakeObserverService:
+    def __init__(self) -> None:
+        self.heartbeat_calls = 0
+
     def classify_inflight(self, prompt: str, snapshot: dict) -> ObserverDecision:
         if "어디까지" in prompt:
             return ObserverDecision("status_query", "지금 상태를 보고 있습니다.")
         return ObserverDecision("queue_next", "끝난 뒤 이어서 처리할게요.")
 
     def summarize_heartbeat(self, snapshot: dict) -> str:
-        return f"heartbeat:{snapshot['state']}"
+        self.heartbeat_calls += 1
+        return f"heartbeat:{snapshot['state']}:{self.heartbeat_calls}"
 
 
 class _FakeSessionManager:
@@ -52,6 +56,7 @@ def test_maybe_route_inflight_message_returns_observer_decision() -> None:
 def test_run_heartbeat_loop_sends_updates_until_run_finishes() -> None:
     async def scenario() -> None:
         sent: list[str] = []
+        observer = _FakeObserverService()
 
         async def send_update(text: str) -> None:
             sent.append(text)
@@ -63,7 +68,7 @@ def test_run_heartbeat_loop_sends_updates_until_run_finishes() -> None:
         run_task = asyncio.create_task(_finish())
         await run_heartbeat_loop(
             _FakeSessionManager(),
-            _FakeObserverService(),
+            observer,
             session_id="slack:C1:main",
             run_task=run_task,
             send_update=send_update,
@@ -71,7 +76,7 @@ def test_run_heartbeat_loop_sends_updates_until_run_finishes() -> None:
             interval_seconds=0.02,
         )
 
-        assert sent
-        assert sent[0] == "heartbeat:running"
+        assert sent == ["heartbeat:running:1"]
+        assert observer.heartbeat_calls == 1
 
     asyncio.run(scenario())

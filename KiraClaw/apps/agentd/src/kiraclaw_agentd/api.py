@@ -454,6 +454,7 @@ def create_app() -> FastAPI:
             "session_scope": settings.session_scope,
             "session_record_limit": settings.session_record_limit,
             "session_idle_seconds": settings.session_idle_seconds,
+            "response_trace_enabled": settings.response_trace_enabled,
             "memory_enabled": settings.memory_enabled,
             "home_mode": settings.home_mode,
             "active_home_mode": settings.active_home_mode,

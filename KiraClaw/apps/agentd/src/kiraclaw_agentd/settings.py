@@ -150,9 +150,10 @@ class KiraClawSettings(BaseSettings):
     session_scope: str = "session-lane"
     session_record_limit: int = 100
     session_idle_seconds: float = 900
+    response_trace_enabled: bool = False
     observer_enabled: bool = True
-    observer_heartbeat_initial_seconds: float = 10.0
-    observer_heartbeat_interval_seconds: float = 30.0
+    observer_heartbeat_initial_seconds: float = 30.0
+    observer_heartbeat_interval_seconds: float = 180.0
     memory_enabled: bool = True
 
     home_mode: str = "auto"
@@ -324,6 +325,7 @@ class KiraClawSettings(BaseSettings):
             "slack_enabled": "SLACK_ENABLED",
             "telegram_enabled": "TELEGRAM_ENABLED",
             "discord_enabled": "DISCORD_ENABLED",
+            "response_trace_enabled": "RESPONSE_TRACE_ENABLED",
         }
         for field_name, legacy_key in legacy_bool_field_map.items():
             if field_name in explicit_fields:

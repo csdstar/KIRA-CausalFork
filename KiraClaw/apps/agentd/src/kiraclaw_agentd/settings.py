@@ -153,7 +153,7 @@ class KiraClawSettings(BaseSettings):
     response_trace_enabled: bool = False
     observer_enabled: bool = True
     observer_heartbeat_initial_seconds: float = 30.0
-    observer_heartbeat_interval_seconds: float = 180.0
+    observer_heartbeat_interval_seconds: float = 300.0
     memory_enabled: bool = True
 
     home_mode: str = "auto"

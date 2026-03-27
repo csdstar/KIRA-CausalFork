@@ -64,27 +64,23 @@ function fullDiskAccessView(status) {
     return {
       className: "status-chip online",
       label: t("settings.fullDiskAccessGranted"),
-      message: t("settings.fullDiskAccessGrantedStatus"),
     };
   }
   if (status === "not_granted") {
     return {
       className: "status-chip offline",
       label: t("settings.fullDiskAccessNotGranted"),
-      message: "",
     };
   }
   if (status === "unsupported") {
     return {
       className: "status-chip info",
       label: t("settings.fullDiskAccessUnsupported"),
-      message: t("settings.fullDiskAccessUnsupportedStatus"),
     };
   }
   return {
     className: "status-chip info",
     label: t("settings.fullDiskAccessUnknown"),
-    message: t("settings.fullDiskAccessUnknownStatus"),
   };
 }
 
@@ -92,10 +88,9 @@ function renderFullDiskAccessStatus() {
   const section = byId("full-disk-access-section");
   const panel = byId("full-disk-access-panel");
   const chip = byId("full-disk-access-chip");
-  const status = byId("full-disk-access-status");
   const openButton = byId("open-full-disk-access-settings");
   const relaunchButton = byId("relaunch-app");
-  if (!section || !panel || !chip || !status) {
+  if (!section || !panel || !chip) {
     return;
   }
 
@@ -103,7 +98,6 @@ function renderFullDiskAccessStatus() {
     section.hidden = true;
     chip.className = "status-chip info";
     setText(chip, t("common.checking"));
-    setText(status, t("settings.fullDiskAccessUnknownStatus"));
     if (openButton) {
       openButton.disabled = false;
     }
@@ -117,7 +111,6 @@ function renderFullDiskAccessStatus() {
   const view = fullDiskAccessView(String(state.fullDiskAccess.status || "unknown"));
   chip.className = view.className;
   setText(chip, view.label);
-  setText(status, view.message);
   const supported = Boolean(state.fullDiskAccess.supported);
   if (openButton) {
     openButton.disabled = !supported;

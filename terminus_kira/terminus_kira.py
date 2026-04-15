@@ -7,6 +7,7 @@ JSON/XML parsing approach with native tool calling via the `tools` parameter in 
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -294,6 +295,32 @@ class TerminusKira(Terminus2):
     def version(self) -> str | None:
         return "1.0.0"
 
+    def _get_litellm_connection_kwargs(self) -> dict[str, Any]:
+        """Resolve optional LiteLLM connection overrides for custom endpoints."""
+        connection_kwargs: dict[str, Any] = {}
+
+        api_base = None
+        if hasattr(self._llm, "_api_base") and self._llm._api_base:
+            api_base = self._llm._api_base
+        elif os.getenv("KIRA_API_BASE"):
+            api_base = os.getenv("KIRA_API_BASE")
+        if api_base:
+            connection_kwargs["api_base"] = api_base
+
+        api_key = None
+        if hasattr(self._llm, "_api_key") and self._llm._api_key:
+            api_key = self._llm._api_key
+        else:
+            api_key = (
+                os.getenv("KIRA_API_KEY")
+                or os.getenv("KIRA_ANTHROPIC_API_KEY")
+                or os.getenv("ANTHROPIC_API_KEY")
+            )
+        if api_key:
+            connection_kwargs["api_key"] = api_key
+
+        return connection_kwargs
+
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
     ) -> None:
@@ -490,6 +517,7 @@ class TerminusKira(Terminus2):
             "timeout": 900,  # 15 minutes timeout, retry on timeout
             "drop_params": True,
         }
+        kwargs.update(self._get_litellm_connection_kwargs())
         # Image analysis doesn't need high reasoning effort
         # Skip reasoning_effort to use default (faster response)
         return await litellm.acompletion(**kwargs)
@@ -615,10 +643,7 @@ class TerminusKira(Terminus2):
             "timeout": 900,  # 15 minutes timeout, retry on timeout
             "drop_params": True,
         }
-
-        # Add api_base if available
-        if hasattr(self._llm, "_api_base") and self._llm._api_base:
-            completion_kwargs["api_base"] = self._llm._api_base
+        completion_kwargs.update(self._get_litellm_connection_kwargs())
 
         # Add reasoning effort if available
         # When reasoning_effort is set, temperature MUST be 1 (API requirement)

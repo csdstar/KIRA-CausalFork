@@ -10,3 +10,5 @@ dependencies = [
     "litellm",
     "tenacity",
 ]
+[tool.setuptools]
+packages = ["terminus_kira"]

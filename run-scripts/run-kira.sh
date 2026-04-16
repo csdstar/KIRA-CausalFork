@@ -18,6 +18,4 @@ JOB_NAME="${BASE_JOB_PREFIX}-$(date +%Y-%m-%d__%H-%M)"
   --agent-import-path "terminus_kira.terminus_kira:TerminusKira" \
   --model "$MODEL_NAME" \
   --env "$HARBOR_ENV" \
-  --n-concurrent "$N_CONCURRENT" \
-  --exclude-task-name chess-best-move \
-  --exclude-task-name sqlite-with-gcov
+  --n-concurrent "$N_CONCURRENT"

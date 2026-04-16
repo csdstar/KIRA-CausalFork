@@ -295,27 +295,107 @@ class TerminusKira(Terminus2):
     def version(self) -> str | None:
         return "1.0.0"
 
+    @staticmethod
+    def _mask_secret(value: str | None) -> str:
+        """Summarize a secret for logs without exposing the raw value."""
+        if not value:
+            return "missing"
+        if len(value) <= 10:
+            return f"len={len(value)}"
+        return f"len={len(value)} prefix={value[:6]} suffix={value[-4:]}"
+
+    def _debug_print_litellm_connection(
+        self,
+        context: str,
+        kwargs: dict[str, Any],
+    ) -> None:
+        """Print non-sensitive LiteLLM connection details for both base and CF agents.
+
+        TerminusKiraCF inherits from TerminusKira, so helpers used by the shared
+        LLM call path must live on the parent class. Otherwise the CF subclass
+        will call into parent code that references a method the object does not
+        actually have.
+        """
+        verbose = os.getenv("KIRA_DEBUG_VERBOSE") == "1"
+        env_api_key = os.getenv("API_KEY")
+        env_moonshot_api_key = os.getenv("MOONSHOT_API_KEY")
+        env_anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        env_api_base = os.getenv("API_BASE")
+        env_moonshot_api_base = os.getenv("MOONSHOT_API_BASE")
+        env_anthropic_api_base = os.getenv("ANTHROPIC_API_BASE")
+        env_anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL")
+
+        print(
+            "[KIRA DEBUG]"
+            f" context={context}"
+            f" model={self._model_name}"
+            f" has_api_key={'api_key' in kwargs}"
+            f" api_key={self._mask_secret(kwargs.get('api_key'))}"
+            f" api_base={kwargs.get('api_base')}"
+            f" tools={'tools' in kwargs}"
+            f" max_tokens={kwargs.get('max_tokens')}"
+            f" temperature={kwargs.get('temperature')}"
+        )
+        if verbose:
+            print(
+                "[KIRA DEBUG VERBOSE] _llm connection:"
+                f" _api_key={self._mask_secret(getattr(self._llm, '_api_key', None))}"
+                f" _api_base={getattr(self._llm, '_api_base', None)}"
+            )
+            print(
+                "[KIRA DEBUG VERBOSE] env connection:"
+                f" API_KEY={self._mask_secret(env_api_key)}"
+                f" MOONSHOT_API_KEY={self._mask_secret(env_moonshot_api_key)}"
+                f" ANTHROPIC_API_KEY={self._mask_secret(env_anthropic_api_key)}"
+            )
+            print(
+                "[KIRA DEBUG VERBOSE] env bases:"
+                f" API_BASE={env_api_base}"
+                f" MOONSHOT_API_BASE={env_moonshot_api_base}"
+                f" ANTHROPIC_API_BASE={env_anthropic_api_base}"
+                f" ANTHROPIC_BASE_URL={env_anthropic_base_url}"
+            )
+
     def _get_litellm_connection_kwargs(self) -> dict[str, Any]:
         """Resolve optional LiteLLM connection overrides for custom endpoints."""
         connection_kwargs: dict[str, Any] = {}
 
-        api_base = None
-        if hasattr(self._llm, "_api_base") and self._llm._api_base:
-            api_base = self._llm._api_base
-        elif os.getenv("KIRA_API_BASE"):
-            api_base = os.getenv("KIRA_API_BASE")
+        api_base_source = "_llm._api_base"
+        api_base = (
+            getattr(self._llm, "_api_base", None)
+            or os.getenv("API_BASE")
+            or os.getenv("ANTHROPIC_API_BASE")
+            or os.getenv("ANTHROPIC_BASE_URL")
+        )
+        if not getattr(self._llm, "_api_base", None):
+            if os.getenv("API_BASE"):
+                api_base_source = "env:API_BASE"
+            elif os.getenv("ANTHROPIC_API_BASE"):
+                api_base_source = "env:ANTHROPIC_API_BASE"
+            elif os.getenv("ANTHROPIC_BASE_URL"):
+                api_base_source = "env:ANTHROPIC_BASE_URL"
+            else:
+                api_base_source = "missing"
         if api_base:
             connection_kwargs["api_base"] = api_base
 
         api_key = None
+        api_key_source = "missing"
         if hasattr(self._llm, "_api_key") and self._llm._api_key:
             api_key = self._llm._api_key
+            api_key_source = "_llm._api_key"
         else:
             api_key = (
-                os.getenv("KIRA_API_KEY")
-                or os.getenv("KIRA_ANTHROPIC_API_KEY")
+                os.getenv("API_KEY")
+                or os.getenv("MOONSHOT_API_KEY")
                 or os.getenv("ANTHROPIC_API_KEY")
             )
+            if os.getenv("API_KEY"):
+                api_key_source = "env:API_KEY"
+            elif os.getenv("MOONSHOT_API_KEY"):
+                api_key_source = "env:MOONSHOT_API_KEY"
+            elif os.getenv("ANTHROPIC_API_KEY"):
+                api_key_source = "env:ANTHROPIC_API_KEY"
         if api_key:
             connection_kwargs["api_key"] = api_key
 
@@ -518,6 +598,7 @@ class TerminusKira(Terminus2):
             "drop_params": True,
         }
         kwargs.update(self._get_litellm_connection_kwargs())
+        self._debug_print_litellm_connection("_call_llm_for_image", kwargs)
         # Image analysis doesn't need high reasoning effort
         # Skip reasoning_effort to use default (faster response)
         return await litellm.acompletion(**kwargs)
@@ -647,9 +728,16 @@ class TerminusKira(Terminus2):
 
         # Add reasoning effort if available
         # When reasoning_effort is set, temperature MUST be 1 (API requirement)
-        if self._reasoning_effort:
+        if self._model_name == "moonshot/kimi-k2.5":
+            # Kimi K2.5 默认思考开启，temperature 必须为 1.0
+            completion_kwargs["temperature"] = 1.0
+            # 如果你想显式声明，也可以加：
+            # completion_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+        elif self._reasoning_effort:
             completion_kwargs["reasoning_effort"] = self._reasoning_effort
             completion_kwargs["temperature"] = 1
+
+        self._debug_print_litellm_connection("_call_llm_with_tools", completion_kwargs)
 
         try:
             response = await litellm.acompletion(**completion_kwargs)
@@ -715,6 +803,8 @@ class TerminusKira(Terminus2):
             assistant_message = {"role": "assistant", "content": tool_response.content}
             if tool_response.tool_calls:
                 assistant_message["tool_calls"] = tool_response.tool_calls
+            if tool_response.reasoning_content is not None:
+                assistant_message["reasoning_content"] = tool_response.reasoning_content
 
             chat._messages.append({"role": "user", "content": prompt})
             chat._messages.append(assistant_message)
@@ -782,6 +872,8 @@ class TerminusKira(Terminus2):
             assistant_message = {"role": "assistant", "content": tool_response.content}
             if tool_response.tool_calls:
                 assistant_message["tool_calls"] = tool_response.tool_calls
+            if tool_response.reasoning_content is not None:
+                assistant_message["reasoning_content"] = tool_response.reasoning_content
 
             chat._messages.append({"role": "user", "content": summary_prompt})
             chat._messages.append(assistant_message)
@@ -829,6 +921,8 @@ class TerminusKira(Terminus2):
             assistant_message = {"role": "assistant", "content": tool_response.content}
             if tool_response.tool_calls:
                 assistant_message["tool_calls"] = tool_response.tool_calls
+            if tool_response.reasoning_content is not None:
+                assistant_message["reasoning_content"] = tool_response.reasoning_content
             chat._messages.append(assistant_message)
 
             # Add tool result messages for each tool call

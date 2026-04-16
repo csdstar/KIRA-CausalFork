@@ -48,6 +48,11 @@ from harbor.models.trajectories import (
     Step,
     ToolCall,
 )
+from terminus_kira.reasoning_controls import (
+    apply_reasoning_temperature_rules,
+    build_reasoning_request_overrides,
+    request_has_reasoning_enabled,
+)
 
 
 class BlockError(Exception):
@@ -329,6 +334,7 @@ class TerminusKira(Terminus2):
             "[KIRA DEBUG]"
             f" context={context}"
             f" model={self._model_name}"
+            f" reasoning_enabled={request_has_reasoning_enabled(self._model_name, kwargs)}"
             f" has_api_key={'api_key' in kwargs}"
             f" api_key={self._mask_secret(kwargs.get('api_key'))}"
             f" api_base={kwargs.get('api_base')}"
@@ -597,10 +603,18 @@ class TerminusKira(Terminus2):
             "timeout": 900,  # 15 minutes timeout, retry on timeout
             "drop_params": True,
         }
+        # Image analysis should skip generic reasoning_effort, but still honor
+        # provider-specific thinking controls from the environment.
+        kwargs.update(
+            build_reasoning_request_overrides(
+                model,
+                reasoning_effort=self._reasoning_effort,
+                include_reasoning_effort=False,
+            )
+        )
+        apply_reasoning_temperature_rules(model, kwargs)
         kwargs.update(self._get_litellm_connection_kwargs())
         self._debug_print_litellm_connection("_call_llm_for_image", kwargs)
-        # Image analysis doesn't need high reasoning effort
-        # Skip reasoning_effort to use default (faster response)
         return await litellm.acompletion(**kwargs)
 
     async def _execute_image_read(
@@ -724,18 +738,16 @@ class TerminusKira(Terminus2):
             "timeout": 900,  # 15 minutes timeout, retry on timeout
             "drop_params": True,
         }
+        # Normalize provider-specific reasoning switches in one place so we do
+        # not need model-name-specific branches in the request path.
+        completion_kwargs.update(
+            build_reasoning_request_overrides(
+                self._model_name,
+                reasoning_effort=self._reasoning_effort,
+            )
+        )
+        apply_reasoning_temperature_rules(self._model_name, completion_kwargs)
         completion_kwargs.update(self._get_litellm_connection_kwargs())
-
-        # Add reasoning effort if available
-        # When reasoning_effort is set, temperature MUST be 1 (API requirement)
-        if self._model_name == "moonshot/kimi-k2.5":
-            # Kimi K2.5 默认思考开启，temperature 必须为 1.0
-            completion_kwargs["temperature"] = 1.0
-            # 如果你想显式声明，也可以加：
-            # completion_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-        elif self._reasoning_effort:
-            completion_kwargs["reasoning_effort"] = self._reasoning_effort
-            completion_kwargs["temperature"] = 1
 
         self._debug_print_litellm_connection("_call_llm_with_tools", completion_kwargs)
 

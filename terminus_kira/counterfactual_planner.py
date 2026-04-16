@@ -1,10 +1,16 @@
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import litellm
 from harbor.agents.terminus_2.terminus_2 import Command
+from harbor.models.metric import UsageInfo
+from terminus_kira.reasoning_controls import (
+    apply_reasoning_temperature_rules,
+    build_reasoning_request_overrides,
+)
 
 
 @dataclass
@@ -27,6 +33,8 @@ class PlannerResult:
     candidates: List[CandidatePlan]
     changed: bool
     rationale: str
+    usage: UsageInfo | None = None
+    api_request_times_ms: List[float] | None = None
 
 
 class CounterfactualPlanner:
@@ -60,6 +68,11 @@ class CounterfactualPlanner:
         self.api_base = api_base
         self.api_key = api_key
         self.trigger_mode = trigger_mode
+        self._planner_usage: UsageInfo | None = None
+        self._planner_request_times_ms: List[float] = []
+        self._late_stage_score_penalty = 0.35
+        self._reverification_penalty = 0.20
+        self._factual_completion_bonus = 0.12
 
     def should_trigger(
         self,
@@ -107,6 +120,20 @@ class CounterfactualPlanner:
         original_commands: List[Command],
         episode: int,
     ) -> PlannerResult:
+        self._planner_usage = UsageInfo(
+            prompt_tokens=0,
+            completion_tokens=0,
+            cache_tokens=0,
+            cost_usd=0.0,
+        )
+        self._planner_request_times_ms = []
+        context_text = self._build_context_text(
+            original_instruction=original_instruction,
+            terminal_state=terminal_state,
+            current_prompt=current_prompt,
+            analysis=analysis,
+            plan=plan,
+        )
         factual = CandidatePlan(
             name="factual_model_plan",
             rationale=plan or analysis,
@@ -131,7 +158,9 @@ class CounterfactualPlanner:
                 original_instruction=original_instruction,
                 terminal_state=terminal_state,
                 candidates=candidates,
+                context_text=context_text,
             )
+            self._apply_completion_guardrails(scored, factual.name, context_text)
             selected = max(scored, key=lambda c: c.score)
             changed = selected.name != factual.name
 
@@ -145,6 +174,8 @@ class CounterfactualPlanner:
                     f"cost={selected.cost:.2f}, info_gain={selected.info_gain:.2f}, "
                     f"robustness={selected.robustness:.2f}."
                 ),
+                usage=self._planner_usage,
+                api_request_times_ms=self._planner_request_times_ms.copy(),
             )
 
         except Exception as exc:
@@ -155,6 +186,8 @@ class CounterfactualPlanner:
                 candidates=[factual],
                 changed=False,
                 rationale=f"CounterfactualPlanner failed open: {exc}",
+                usage=self._planner_usage,
+                api_request_times_ms=self._planner_request_times_ms.copy(),
             )
 
     async def _generate_counterfactual_candidates(
@@ -167,6 +200,15 @@ class CounterfactualPlanner:
         original_commands: List[Command],
     ) -> List[CandidatePlan]:
         original_cmd_text = self._commands_to_text(original_commands)
+        guidance = self._build_progress_guidance(
+            self._build_context_text(
+                original_instruction=original_instruction,
+                terminal_state=terminal_state,
+                current_prompt=current_prompt,
+                analysis=analysis,
+                plan=plan,
+            )
+        )
 
         prompt = f"""
 You are a counterfactual workflow planner for a terminal agent harness.
@@ -189,6 +231,9 @@ Model plan:
 
 Factual commands:
 {original_cmd_text}
+
+Progress guidance:
+{guidance}
 
 Generate up to {self.max_candidates - 1} alternatives. Prefer useful workflow
 differences, for example:
@@ -242,6 +287,7 @@ Return strict JSON only:
         original_instruction: str,
         terminal_state: str,
         candidates: List[CandidatePlan],
+        context_text: str,
     ) -> List[CandidatePlan]:
         candidate_payload = []
         for idx, c in enumerate(candidates):
@@ -266,6 +312,9 @@ Original task:
 
 Current terminal state:
 {terminal_state[-6000:]}
+
+Progress guidance:
+{self._build_progress_guidance(context_text)}
 
 Candidates:
 {json.dumps(candidate_payload, indent=2)}
@@ -314,6 +363,147 @@ Return strict JSON only:
 
         return candidates
 
+    def _apply_completion_guardrails(
+        self,
+        candidates: List[CandidatePlan],
+        factual_name: str,
+        context_text: str,
+    ) -> None:
+        """Bias the planner toward convergence once the task looks nearly done.
+
+        This keeps CF helpful in early exploration, but reduces the chance that
+        late-stage "verify even more" branches open a brand-new subproblem such
+        as packaging or build-system work after the core task is already solved.
+        """
+        if not self._has_strong_completion_signals(context_text):
+            return
+
+        packaging_blocker_present = self._mentions_packaging_blocker(context_text)
+
+        for candidate in candidates:
+            command_text = self._commands_to_text(candidate.commands).lower()
+
+            if candidate.name == factual_name:
+                if not self._introduces_packaging_detour(command_text):
+                    candidate.score += self._factual_completion_bonus
+                continue
+
+            if (
+                not packaging_blocker_present
+                and self._introduces_packaging_detour(command_text)
+            ):
+                candidate.score -= self._late_stage_score_penalty
+                candidate.rationale += (
+                    "\nHeuristic adjustment: penalized because the task already "
+                    "shows strong success signals, and this branch introduces a "
+                    "new packaging/build-system detour."
+                )
+
+            if self._looks_like_reverification_loop(command_text):
+                candidate.score -= self._reverification_penalty
+                candidate.rationale += (
+                    "\nHeuristic adjustment: penalized for redundant late-stage "
+                    "reverification after strong completion signals."
+                )
+
+    @staticmethod
+    def _build_context_text(
+        original_instruction: str,
+        terminal_state: str,
+        current_prompt: str,
+        analysis: str,
+        plan: str,
+    ) -> str:
+        return "\n\n".join(
+            part
+            for part in [
+                original_instruction,
+                terminal_state,
+                current_prompt,
+                analysis,
+                plan,
+            ]
+            if part
+        ).lower()
+
+    def _build_progress_guidance(self, context_text: str) -> str:
+        if self._has_strong_completion_signals(context_text):
+            return (
+                "The task appears close to completion. Prefer minimal finishing "
+                "workflows that preserve the current successful path. Avoid "
+                "opening new packaging, environment, or smoke-test branches "
+                "unless the current context already shows a blocker there."
+            )
+        return (
+            "Prefer workflows that add new information or reduce irreversible "
+            "risk. Avoid redundant inspection unless it directly resolves an "
+            "active blocker."
+        )
+
+    @staticmethod
+    def _has_strong_completion_signals(context_text: str) -> bool:
+        success_signals = [
+            "all constraints satisfied",
+            "roundtrip test passed",
+            "directories are identical",
+            "same md5",
+            "checksums are identical",
+            "exact reconstruction",
+            "everything is working correctly",
+            "decompression completed successfully",
+            "uv sync works",
+            "compression completed",
+            "verified the roundtrip works correctly",
+        ]
+        matches = sum(1 for signal in success_signals if signal in context_text)
+        return matches >= 2
+
+    @staticmethod
+    def _mentions_packaging_blocker(context_text: str) -> bool:
+        packaging_blockers = [
+            "hatchling",
+            "build backend returned an error",
+            "unable to determine which files to ship",
+            "build_editable",
+            "uv run",
+            "editable",
+            "tool.hatch.build.targets.wheel",
+            "metadata not found",
+            "pyproject.toml needs",
+        ]
+        return any(token in context_text for token in packaging_blockers)
+
+    @staticmethod
+    def _introduces_packaging_detour(command_text: str) -> bool:
+        detour_tokens = [
+            "uv run",
+            "uv sync",
+            "pyproject.toml",
+            "hatchling",
+            "build-system",
+            "tool.hatch.build.targets.wheel",
+            "editable",
+            "wheel",
+            "src/",
+        ]
+        return any(token in command_text for token in detour_tokens)
+
+    @staticmethod
+    def _looks_like_reverification_loop(command_text: str) -> bool:
+        reverification_tokens = [
+            "diff ",
+            "md5sum",
+            "sha256sum",
+            "verify.py",
+            "validate.py",
+            "smoke_test",
+            "quick_test",
+            "head -",
+            "cat /app/pyproject.toml",
+            "ls -la /app",
+        ]
+        return any(token in command_text for token in reverification_tokens)
+
     async def _json_completion(self, prompt: str) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self.model_name,
@@ -322,14 +512,62 @@ Return strict JSON only:
             "timeout": 900,
             "drop_params": True,
         }
+        kwargs.update(
+            build_reasoning_request_overrides(
+                self.model_name,
+                reasoning_effort=None,
+                include_reasoning_effort=False,
+            )
+        )
+        apply_reasoning_temperature_rules(self.model_name, kwargs)
         if self.api_base:
             kwargs["api_base"] = self.api_base
         if self.api_key:
             kwargs["api_key"] = self.api_key
 
+        start_time = time.time()
         response = await litellm.acompletion(**kwargs)
+        end_time = time.time()
+        self._planner_request_times_ms.append((end_time - start_time) * 1000)
+        self._update_planner_usage(self._extract_usage_info(response))
         text = response["choices"][0]["message"]["content"]
         return self._safe_json_loads(text)
+
+    def _extract_usage_info(self, response) -> UsageInfo | None:
+        """Extract usage info from a LiteLLM completion response."""
+        try:
+            usage = response.usage
+            if usage:
+                cost = 0.0
+                try:
+                    cost = litellm.completion_cost(completion_response=response) or 0.0
+                except Exception:
+                    pass
+                return UsageInfo(
+                    prompt_tokens=usage.prompt_tokens or 0,
+                    completion_tokens=usage.completion_tokens or 0,
+                    cache_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+                    cost_usd=cost,
+                )
+        except (AttributeError, TypeError):
+            pass
+        return None
+
+    def _update_planner_usage(self, usage: UsageInfo | None) -> None:
+        """Accumulate planner-side usage so CF cost is visible in trial stats."""
+        if usage is None:
+            return
+        if self._planner_usage is None:
+            self._planner_usage = UsageInfo(
+                prompt_tokens=0,
+                completion_tokens=0,
+                cache_tokens=0,
+                cost_usd=0.0,
+            )
+        self._planner_usage.prompt_tokens += usage.prompt_tokens
+        self._planner_usage.completion_tokens += usage.completion_tokens
+        self._planner_usage.cache_tokens += usage.cache_tokens
+        self._planner_usage.cost_usd += usage.cost_usd
 
     @staticmethod
     def _safe_json_loads(text: str) -> dict[str, Any]:

@@ -102,6 +102,17 @@ class TerminusKiraCF(TerminusKira):
                     episode=getattr(self, "_n_episodes", 0),
                 )
 
+                # Count counterfactual-planner API usage as part of the same
+                # agent step so trial-level token/cost stats reflect the real
+                # cost of running CF mode.
+                if result.usage is not None:
+                    chat._cumulative_input_tokens += result.usage.prompt_tokens
+                    chat._cumulative_output_tokens += result.usage.completion_tokens
+                    chat._cumulative_cache_tokens += result.usage.cache_tokens
+                    chat._cumulative_cost += result.usage.cost_usd
+                if result.api_request_times_ms:
+                    self._api_request_times.extend(result.api_request_times_ms)
+
                 if result.changed:
                     commands = result.selected.commands
 

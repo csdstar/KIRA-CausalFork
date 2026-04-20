@@ -11,6 +11,11 @@ set +a
 
 JOB_NAME="${CF_JOB_PREFIX}-$(date +%Y-%m-%d__%H-%M)"
 
+agent_kwargs=()
+if [[ -n "${MODEL_INFO:-}" ]]; then
+  agent_kwargs+=(--agent-kwarg "model_info=${MODEL_INFO}")
+fi
+
 "$CONDA_PREFIX/bin/harbor" run \
   --dataset "$DATASET" \
   --include-task-name reshard-c4-data \
@@ -20,6 +25,7 @@ JOB_NAME="${CF_JOB_PREFIX}-$(date +%Y-%m-%d__%H-%M)"
   --model "$MODEL_NAME" \
   --env "$HARBOR_ENV" \
   --n-concurrent "$N_CONCURRENT" \
+  "${agent_kwargs[@]}" \
   --exclude-task-name chess-best-move \
   --exclude-task-name sqlite-with-gcov \
   --exclude-task-name gpt2-codegolf \

@@ -229,6 +229,34 @@ class TerminusKira(Terminus2):
         super().__init__(*args, **kwargs)
         self._marker_seq = 0
         self._total_time_saved = 0.0
+        self._register_custom_model_info_from_env()
+
+    def _register_custom_model_info_from_env(self) -> None:
+        raw = os.getenv("MODEL_INFO")
+        if not raw:
+            return
+
+        try:
+            info = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"MODEL_INFO 不是合法 JSON: {e}") from e
+
+        # 支持两种写法：
+        # 1) 完整映射：{"dashscope/qwen3.6-plus": {...}}
+        # 2) 仅条目：{"litellm_provider": "dashscope", ...}
+        if "litellm_provider" in info:
+            info = {self._model_name: info}
+
+        if self._model_name not in info:
+            raise ValueError(
+                f"MODEL_INFO 中没有当前模型 {self._model_name}，"
+                f"实际 keys={list(info.keys())}"
+            )
+
+        litellm.register_model(info)
+        print(
+            f"[KIRA DEBUG] registered custom LiteLLM model info for {self._model_name}"
+        )
 
     async def _with_block_timeout(self, coro, timeout_sec: int = BLOCK_TIMEOUT_SEC):
         """Wrap coroutine with block detection timeout."""
@@ -285,9 +313,7 @@ class TerminusKira(Terminus2):
 
         # Filter out marker lines from output so LLM sees clean output
         output = await session.get_incremental_output()
-        markers = {
-            f"{_MARKER_PREFIX}{seq}__" for seq in range(1, self._marker_seq + 1)
-        }
+        markers = {f"{_MARKER_PREFIX}{seq}__" for seq in range(1, self._marker_seq + 1)}
         lines = output.split("\n")
         lines = [line for line in lines if not any(m in line for m in markers)]
         output = "\n".join(lines)

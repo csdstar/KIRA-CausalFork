@@ -191,3 +191,4 @@ temp_*.csv
 
 evaluation/results/*builds/
 jobs*
+run-scripts/run.log

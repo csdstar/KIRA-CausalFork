@@ -12,12 +12,24 @@ Status groups (based on result.json reward_stats):
   - errored   trial ended in an exception (exception_stats)
   - unfinished trials not present in reward_stats nor exception_stats
 
+Note on task names:
+  Harbor's real task name can contain a namespace prefix (e.g. "aider/polyglot_cpp_bank-account")
+  while the on-disk trial directory is "polyglot_cpp_bank-account__RANDOMID" (no slash).
+  This script reads the authoritative `task_name` field from each trial's own
+  `result.json` so the emitted names are directly usable with
+  `harbor run --include-task-name ...`. The --exception-type flag narrows the
+  `errored` bucket to a specific exception class (e.g. AgentTimeoutError).
+
 Usage examples:
   # Get failing task names, one per line:
   python scripts/filter_tasks.py jobs/base-... --status failed
 
   # Combine failed + errored for a retry run:
   python scripts/filter_tasks.py jobs/base-... --status failed errored
+
+  # Only timed-out trials (worth replanning with CF):
+  python scripts/filter_tasks.py jobs/base-... --status errored \
+      --exception-type AgentTimeoutError
 
   # Emit harbor --include-task-name flags for one-shot piping:
   python scripts/filter_tasks.py jobs/base-... --status failed --format harbor-include \
@@ -43,14 +55,73 @@ def strip_trial_suffix(trial_name: str) -> str:
     return TRIAL_SUFFIX_RE.sub("", trial_name)
 
 
-def classify_trials(result: dict) -> dict[str, set[str]]:
-    """Return sets of task_name (not trial_name) grouped by status."""
+def read_trial_task_name(trial_dir: Path) -> str | None:
+    """Read the authoritative task_name from a trial's result.json.
+
+    Falls back to None if missing/unreadable; caller should fall back to the
+    directory-name heuristic.
+    """
+    rj = trial_dir / "result.json"
+    try:
+        with rj.open() as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    return data.get("task_name")
+
+
+def read_trial_exception(trial_dir: Path) -> str | None:
+    """Read trial-level exception type if any."""
+    rj = trial_dir / "result.json"
+    try:
+        with rj.open() as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    # Some harbor versions store exception at the top level
+    exc = data.get("exception_type") or data.get("exception")
+    if isinstance(exc, dict):
+        return exc.get("type")
+    return exc
+
+
+def build_trial_to_task_map(job_dir: Path) -> dict[str, tuple[str, str | None]]:
+    """For every trial dir found, return {trial_name: (task_name, exception_type)}.
+
+    Falls back to stripping the directory suffix when the trial's own
+    result.json is missing the task_name field.
+    """
+    out: dict[str, tuple[str, str | None]] = {}
+    for child in job_dir.iterdir():
+        if not child.is_dir() or "__" not in child.name:
+            continue
+        task_name = read_trial_task_name(child) or strip_trial_suffix(child.name)
+        exc = read_trial_exception(child)
+        out[child.name] = (task_name, exc)
+    return out
+
+
+def classify_trials(
+    result: dict,
+    trial_to_task: dict[str, tuple[str, str | None]],
+    exception_filter: str | None = None,
+) -> dict[str, set[str]]:
+    """Return sets of task_name (harbor-compatible) grouped by status.
+
+    Uses trial_to_task to translate trial_name → real task_name. If a trial
+    is not in trial_to_task (e.g. dir was deleted), falls back to suffix-stripping.
+    """
     groups: dict[str, set[str]] = {
         "passed": set(),
         "failed": set(),
         "partial": set(),
         "errored": set(),
     }
+
+    def resolve(trial_name: str) -> tuple[str, str | None]:
+        if trial_name in trial_to_task:
+            return trial_to_task[trial_name]
+        return strip_trial_suffix(trial_name), None
 
     evals = result.get("stats", {}).get("evals", {}) or {}
     for _eval_name, eval_data in evals.items():
@@ -67,28 +138,40 @@ def classify_trials(result: dict) -> dict[str, set[str]]:
             else:
                 bucket = "partial"
             for trial in trial_names:
-                groups[bucket].add(strip_trial_suffix(trial))
+                task, _ = resolve(trial)
+                groups[bucket].add(task)
 
         exc_stats = eval_data.get("exception_stats") or {}
-        for _exc_name, trial_names in exc_stats.items():
+        for exc_name, trial_names in exc_stats.items():
+            if exception_filter and exc_name != exception_filter:
+                continue
             for trial in trial_names:
-                groups["errored"].add(strip_trial_suffix(trial))
+                task, _ = resolve(trial)
+                groups["errored"].add(task)
 
     return groups
 
 
-def discover_unfinished(job_dir: Path, known: set[str]) -> set[str]:
-    """Trial directories that exist on disk but aren't in result.json's reward_stats."""
+def discover_unfinished(
+    trial_to_task: dict[str, tuple[str, str | None]],
+    known: set[str],
+) -> set[str]:
+    """Trials that exist on disk but aren't in result.json's reward/exception stats."""
     unfinished: set[str] = set()
-    for child in job_dir.iterdir():
-        if not child.is_dir():
-            continue
-        name = strip_trial_suffix(child.name)
-        if name == child.name:
-            continue
-        if name not in known:
-            unfinished.add(name)
+    for trial_name, (task, _) in trial_to_task.items():
+        if task not in known:
+            unfinished.add(task)
     return unfinished
+
+
+def exception_type_histogram(result: dict) -> dict[str, int]:
+    """Count number of trials per exception type (for stats display)."""
+    counts: dict[str, int] = {}
+    evals = result.get("stats", {}).get("evals", {}) or {}
+    for eval_data in evals.values():
+        for exc_name, trials in (eval_data.get("exception_stats") or {}).items():
+            counts[exc_name] = counts.get(exc_name, 0) + len(trials)
+    return counts
 
 
 def format_output(names: list[str], fmt: str) -> str:
@@ -122,6 +205,13 @@ def main() -> int:
         help="Output format. Default: lines (one name per line).",
     )
     parser.add_argument(
+        "--exception-type",
+        type=str,
+        default=None,
+        help="When filtering errored trials, only include those whose exception "
+             "type matches this (e.g. AgentTimeoutError). No effect on other statuses.",
+    )
+    parser.add_argument(
         "--stats",
         action="store_true",
         help="Print a summary table to stderr alongside normal output.",
@@ -136,14 +226,20 @@ def main() -> int:
     with result_path.open() as f:
         result = json.load(f)
 
-    groups = classify_trials(result)
+    trial_to_task = build_trial_to_task_map(args.job_dir)
+    groups = classify_trials(result, trial_to_task, exception_filter=args.exception_type)
     known = set().union(*groups.values())
-    groups["unfinished"] = discover_unfinished(args.job_dir, known)
+    groups["unfinished"] = discover_unfinished(trial_to_task, known)
 
     if args.stats:
         print("=== status summary ===", file=sys.stderr)
         for k, v in groups.items():
             print(f"  {k:10s} {len(v):4d}", file=sys.stderr)
+        exc_hist = exception_type_histogram(result)
+        if exc_hist:
+            print("--- exception types ---", file=sys.stderr)
+            for k, v in sorted(exc_hist.items(), key=lambda x: -x[1]):
+                print(f"  {k:28s} {v:4d}", file=sys.stderr)
         print("======================", file=sys.stderr)
 
     if "all" in args.status:

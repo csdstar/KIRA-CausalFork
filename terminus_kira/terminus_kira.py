@@ -278,6 +278,10 @@ class TerminusKira(Terminus2):
         Sends a unique echo marker after each command. If the marker appears in
         the output before duration_sec, we move on immediately instead of waiting
         for the full duration. This reduces unnecessary wait time for fast commands.
+        
+        每条命令后面都自动补一个 echo '__CMDEND__<seq>__'，
+        然后轮询 pane 内容；如果 marker 提前出现，
+        说明命令已经跑完，可以马上进入下一步
         """
         for command in commands:
             self._marker_seq += 1
@@ -811,6 +815,7 @@ class TerminusKira(Terminus2):
             usage=usage_info,
         )
 
+###########################################################
     async def _handle_llm_interaction(
         self,
         chat: Chat,
@@ -823,6 +828,9 @@ class TerminusKira(Terminus2):
 
         This overrides the parent's _handle_llm_interaction to use native tools
         instead of JSON/XML parsing.
+        
+        核心的LLM交互模块，负责拼接上下文、发送请求、处理相应信息等
+        理论上可扩展为若干层中间件
         """
         _, prompt_path, response_path = logging_paths
 
@@ -1014,6 +1022,7 @@ class TerminusKira(Terminus2):
             image_read,
         )
 
+#################################################
     async def _run_agent_loop(
         self,
         initial_prompt: str,
@@ -1021,7 +1030,11 @@ class TerminusKira(Terminus2):
         logging_dir: Path | None = None,
         original_instruction: str = "",
     ) -> int:
-        """Run the agent loop with support for image_read tool."""
+        """Run the agent loop with support for image_read tool.
+        在runtime之外的部分，负责检查session状态、
+        维护agent上下文（必要时进行压缩）、
+        根据相应调用结果执行相应函数等等
+        """
         if self._context is None:
             raise RuntimeError("Agent context is not set. This should never happen.")
 
@@ -1041,6 +1054,10 @@ class TerminusKira(Terminus2):
                 self.logger.debug("Session has ended, breaking out of agent loop")
                 return episode + 1
 
+            """调用terminus2的总结功能
+            子代理 1：总结已经做过的工作
+            子代理 2：根据原任务、总结和当前 terminal screen 提问题
+            子代理 3：基于完整历史回答这些问题"""
             if original_instruction and self._enable_summarize:
                 proactive_summary_result = await self._with_block_timeout(
                     self._check_proactive_summarization(
@@ -1075,6 +1092,7 @@ class TerminusKira(Terminus2):
             )
 
             # If we have pending subagent refs, add a system step
+            # 将子代理的引用添加到轨迹中，作为系统消息，提示已经进行了总结和交接以继续任务
             if self._pending_subagent_refs:
                 self._trajectory_steps.append(
                     Step(

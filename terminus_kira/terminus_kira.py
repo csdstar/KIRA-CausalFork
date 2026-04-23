@@ -4,7 +4,8 @@ TerminusKira - A native tool-use variant of Terminus2.
 This agent inherits from harbor's Terminus2 and replaces the ICL (In-Context Learning)
 JSON/XML parsing approach with native tool calling via the `tools` parameter in LLM API calls.
 """
-
+# terminus 2 -> KIRA
+# 2提供了一些runtime（和harbor环境交互，终端执行脚本/执行命令）
 import asyncio
 import json
 import os
@@ -140,7 +141,9 @@ _IMAGE_READ_INSTRUCTION_DESC = (
     "Be specific about what information to extract."
 )
 
+######################################################
 # Tool definitions for native tool use
+# 定义agent可用的tool类型和输出格式
 TOOLS = [
     {
         "type": "function",

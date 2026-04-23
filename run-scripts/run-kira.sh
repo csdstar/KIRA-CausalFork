@@ -8,7 +8,7 @@ set -a
 source /home/star/project/KIRA-CausalFork/.env
 set +a
 
-JOB_NAME="${BASE_JOB_PREFIX}-$(date +%Y-%m-%d__%H-%M)"
+JOB_NAME="${JOB_NAME:-${BASE_JOB_PREFIX}-$(date +%Y-%m-%d__%H-%M)}"
 
 agent_kwargs=()
 if [[ -n "${MODEL_INFO:-}" ]]; then
@@ -24,6 +24,33 @@ if [[ -n "${REASONING_EFFORT:-}" ]]; then
   agent_kwargs+=(--agent-kwarg "reasoning_effort=${REASONING_EFFORT}")
 fi
 
+# Optional task selectors (same shape as run-kira-cf.sh):
+#   INCLUDE_TASK         single task name
+#   INCLUDE_TASKS_FILE   one task name per line
+#   EXCLUDE_TASKS_FILE   one task name per line
+task_selectors=()
+if [[ -n "${INCLUDE_TASK:-}" ]]; then
+  task_selectors+=(--include-task-name "${INCLUDE_TASK}")
+fi
+if [[ -n "${INCLUDE_TASKS_FILE:-}" && -f "${INCLUDE_TASKS_FILE}" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    task_selectors+=(--include-task-name "$line")
+  done < "${INCLUDE_TASKS_FILE}"
+fi
+if [[ -n "${EXCLUDE_TASKS_FILE:-}" && -f "${EXCLUDE_TASKS_FILE}" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    task_selectors+=(--exclude-task-name "$line")
+  done < "${EXCLUDE_TASKS_FILE}"
+fi
+
+echo "=== Launching base job ==="
+echo "  JOB_NAME  = ${JOB_NAME}"
+echo "  DATASET   = ${DATASET}"
+echo "  N_TASKS   = ${N_TASKS}"
+echo "  selectors = ${#task_selectors[@]} item(s)"
+
 "$CONDA_PREFIX/bin/harbor" run \
   --dataset "$DATASET" \
   --n-tasks "$N_TASKS" \
@@ -32,6 +59,7 @@ fi
   --model "$MODEL_NAME" \
   --env "$HARBOR_ENV" \
   --n-concurrent "$N_CONCURRENT" \
+  "${task_selectors[@]}" \
   "${agent_kwargs[@]}"
 
 # Auto-split tasks into passed/failed/errored-CF lists for downstream CF runs.

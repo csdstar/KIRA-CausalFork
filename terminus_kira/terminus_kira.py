@@ -232,6 +232,13 @@ class TerminusKira(Terminus2):
         super().__init__(*args, **kwargs)
         self._marker_seq = 0
         self._total_time_saved = 0.0
+        # Schema-violation telemetry: counts how often the model emits a
+        # malformed `execute_commands` payload (e.g. commands as a list of
+        # strings instead of list[{keystrokes, duration}]). Each violation
+        # triggers a feedback retry rather than a crash, and the count is
+        # reported at the end of run() as an agent capability metric.
+        self._schema_violation_count: int = 0
+        self._schema_violation_log: list[str] = []
         self._register_custom_model_info_from_env()
 
     def _register_custom_model_info_from_env(self) -> None:
@@ -445,7 +452,25 @@ class TerminusKira(Terminus2):
     ) -> None:
         """Run the agent, storing the original instruction for later use."""
         self._original_instruction = instruction
-        await super().run(instruction, environment, context)
+        try:
+            await super().run(instruction, environment, context)
+        finally:
+            # Always log schema-violation telemetry, even on exception, so
+            # every trial's capability profile is recoverable from trial.log.
+            if self._schema_violation_count > 0:
+                print(
+                    f"[KIRA SCHEMA STATS] "
+                    f"violations={self._schema_violation_count} "
+                    f"first_examples={self._schema_violation_log[:3]}"
+                )
+            else:
+                print("[KIRA SCHEMA STATS] violations=0")
+
+    def _record_schema_violation(self, detail: str) -> None:
+        """Increment the schema-violation counter and log a short description."""
+        self._schema_violation_count += 1
+        self._schema_violation_log.append(detail)
+        self.logger.warning(f"[schema-violation #{self._schema_violation_count}] {detail}")
 
     def _get_parser(self):
         """Return None since we use native tool calling instead of parsing."""
@@ -562,9 +587,35 @@ class TerminusKira(Terminus2):
                 analysis = arguments.get("analysis", "")
                 plan = arguments.get("plan", "")
 
-                # Extract commands array
+                # Extract commands array. Detect schema violations (non-native
+                # tool-calling models sometimes return `commands` as a string
+                # or as list[str] instead of list[{keystrokes, duration}]).
+                # Emit an ERROR feedback so _run_agent_loop routes the message
+                # back to the model for a retry, and log it as a capability
+                # metric instead of crashing the trial.
                 cmds = arguments.get("commands", [])
+
+                if not isinstance(cmds, list):
+                    self._record_schema_violation(
+                        f"`commands` must be a JSON array, got "
+                        f"{type(cmds).__name__}: {str(cmds)[:120]}"
+                    )
+                    feedback = (
+                        "ERROR: The `commands` field in your execute_commands "
+                        "call must be a JSON array of objects, each shaped "
+                        '{"keystrokes": "...", "duration": 1.0}. '
+                        f"You returned a {type(cmds).__name__}. "
+                        "Please retry with the correct structure."
+                    )
+                    continue
+
+                bad_entries: list[str] = []
                 for cmd in cmds:
+                    if not isinstance(cmd, dict):
+                        bad_entries.append(
+                            f"{type(cmd).__name__}:{str(cmd)[:80]}"
+                        )
+                        continue
                     keystrokes = cmd.get("keystrokes", "")
                     duration = cmd.get("duration", 1.0)
                     commands.append(
@@ -573,6 +624,23 @@ class TerminusKira(Terminus2):
                             duration_sec=min(duration, 60),
                         )
                     )
+
+                if bad_entries:
+                    self._record_schema_violation(
+                        f"`commands` contained {len(bad_entries)} non-object "
+                        f"entries: {bad_entries[:3]}"
+                    )
+                    # Drop parsed commands entirely and force a retry so the
+                    # model sees a clean failure rather than a partial execution.
+                    commands = []
+                    feedback = (
+                        "ERROR: Each element of `commands` must be a JSON object "
+                        'shaped {"keystrokes": "...", "duration": 1.0}. '
+                        f"You returned {len(bad_entries)} entries of other types "
+                        f"(e.g. {bad_entries[0]}). "
+                        "Please retry with the correct structure."
+                    )
+                    continue
             elif function_name == "task_complete":
                 # Mark task as complete
                 is_task_complete = True

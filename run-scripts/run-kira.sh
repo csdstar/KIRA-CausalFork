@@ -33,3 +33,13 @@ fi
   --env "$HARBOR_ENV" \
   --n-concurrent "$N_CONCURRENT" \
   "${agent_kwargs[@]}"
+
+# Auto-split tasks into passed/failed/errored-CF lists for downstream CF runs.
+# Files land in jobs/<JOB_NAME>/tasks_*.txt
+JOB_DIR="jobs/${JOB_NAME}"
+SPLITTER="$(dirname "$0")/../scripts/split_job_tasks.sh"
+if [[ -d "$JOB_DIR" && -x "$SPLITTER" ]]; then
+    "$SPLITTER" "$JOB_DIR" || echo "[warn] split_job_tasks.sh failed (continuing)" >&2
+else
+    echo "[warn] skipping task split: JOB_DIR=$JOB_DIR  splitter=$SPLITTER" >&2
+fi

@@ -26,7 +26,7 @@
    - `cf_token_overhead`（CF tokens / main tokens）
    - `flips_up` / `flips_down`
 
-**Go/No-go 门槛**（建议）：
+**Go/No-go 门槛**：
 - `cf_token_overhead < 30%`
 - `flips_up ≥ 3 且 flips_up > flips_down`
 

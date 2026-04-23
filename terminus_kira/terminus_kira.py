@@ -61,6 +61,15 @@ class BlockError(Exception):
     pass
 
 
+class SchemaViolationBudgetExceededError(RuntimeError):
+    """Raised when the model violates the tool-call schema more than
+    KIRA_MAX_SCHEMA_RETRIES consecutive times. Surfaces as a distinct
+    exception in harbor's exception_stats so it can be filtered out of
+    reasoning-quality analysis.
+    """
+    pass
+
+
 BLOCK_TIMEOUT_SEC = 600  # 10 minutes
 _MARKER_PREFIX = "__CMDEND__"  # Marker prefix for command completion detection
 
@@ -237,8 +246,14 @@ class TerminusKira(Terminus2):
         # strings instead of list[{keystrokes, duration}]). Each violation
         # triggers a feedback retry rather than a crash, and the count is
         # reported at the end of run() as an agent capability metric.
+        # A consecutive-violation budget prevents capability-poor models from
+        # burning all _max_episodes on schema retries.
         self._schema_violation_count: int = 0
         self._schema_violation_log: list[str] = []
+        self._consecutive_schema_violations: int = 0
+        self._max_consecutive_schema_violations: int = int(
+            os.getenv("KIRA_MAX_SCHEMA_RETRIES", "3")
+        )
         self._register_custom_model_info_from_env()
 
     def _register_custom_model_info_from_env(self) -> None:
@@ -457,20 +472,32 @@ class TerminusKira(Terminus2):
         finally:
             # Always log schema-violation telemetry, even on exception, so
             # every trial's capability profile is recoverable from trial.log.
-            if self._schema_violation_count > 0:
-                print(
-                    f"[KIRA SCHEMA STATS] "
-                    f"violations={self._schema_violation_count} "
-                    f"first_examples={self._schema_violation_log[:3]}"
-                )
-            else:
-                print("[KIRA SCHEMA STATS] violations=0")
+            print(
+                f"[KIRA SCHEMA STATS] "
+                f"violations={self._schema_violation_count} "
+                f"max_consecutive={self._max_consecutive_schema_violations} "
+                f"first_examples={self._schema_violation_log[:3]}"
+            )
 
     def _record_schema_violation(self, detail: str) -> None:
-        """Increment the schema-violation counter and log a short description."""
+        """Increment the schema-violation counter, log, and enforce the
+        consecutive-violation budget so capability-poor models can't loop
+        forever burning all _max_episodes on schema retries.
+        """
         self._schema_violation_count += 1
+        self._consecutive_schema_violations += 1
         self._schema_violation_log.append(detail)
-        self.logger.warning(f"[schema-violation #{self._schema_violation_count}] {detail}")
+        self.logger.warning(
+            f"[schema-violation #{self._schema_violation_count} "
+            f"(consecutive {self._consecutive_schema_violations}/"
+            f"{self._max_consecutive_schema_violations})] {detail}"
+        )
+        if self._consecutive_schema_violations > self._max_consecutive_schema_violations:
+            raise SchemaViolationBudgetExceededError(
+                f"Model violated tool-call schema "
+                f"{self._consecutive_schema_violations} consecutive times "
+                f"(budget={self._max_consecutive_schema_violations}). Last: {detail}"
+            )
 
     def _get_parser(self):
         """Return None since we use native tool calling instead of parsing."""
@@ -665,6 +692,17 @@ class TerminusKira(Terminus2):
                     "Please use execute_commands, task_complete, or image_read."
                 )
                 self.logger.warning(f"Unknown function called: {function_name}")
+
+        # Reset the consecutive-violation counter whenever the model produced
+        # at least one well-formed actionable output. This makes the budget
+        # strict about *consecutive* failures without punishing a model that
+        # slips once but then recovers.
+        produced_valid_output = (
+            bool(commands) or is_task_complete or image_read is not None
+        )
+        schema_error = feedback.startswith("ERROR:") if feedback else False
+        if produced_valid_output and not schema_error:
+            self._consecutive_schema_violations = 0
 
         return commands, is_task_complete, feedback, analysis, plan, image_read
 

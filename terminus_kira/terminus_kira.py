@@ -1465,4 +1465,17 @@ class TerminusKira(Terminus2):
 
                 prompt = observation
 
+        # for loop exhausted without task_complete → max_turns reached
+        self._trajectory_steps.append(
+            Step(
+                step_id=len(self._trajectory_steps) + 1,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                source="system",
+                message=(
+                    f"[max_turns_reached] Agent loop exhausted all {self._max_episodes} "
+                    f"turns without calling task_complete."
+                ),
+            )
+        )
+        self._dump_trajectory()
         return self._n_episodes

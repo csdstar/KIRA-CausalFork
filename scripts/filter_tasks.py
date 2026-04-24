@@ -105,11 +105,11 @@ def classify_trials(
     result: dict,
     trial_to_task: dict[str, tuple[str, str | None]],
     exception_filter: str | None = None,
-) -> dict[str, set[str]]:
-    """Return sets of task_name (harbor-compatible) grouped by status.
+) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Return (groups, task_to_exception).
 
-    Uses trial_to_task to translate trial_name → real task_name. If a trial
-    is not in trial_to_task (e.g. dir was deleted), falls back to suffix-stripping.
+    groups maps status → set of task_names.
+    task_to_exception maps task_name → exception class (for errored tasks only).
     """
     groups: dict[str, set[str]] = {
         "passed": set(),
@@ -117,6 +117,7 @@ def classify_trials(
         "partial": set(),
         "errored": set(),
     }
+    task_to_exception: dict[str, str] = {}
 
     def resolve(trial_name: str) -> tuple[str, str | None]:
         if trial_name in trial_to_task:
@@ -148,8 +149,9 @@ def classify_trials(
             for trial in trial_names:
                 task, _ = resolve(trial)
                 groups["errored"].add(task)
+                task_to_exception[task] = exc_name
 
-    return groups
+    return groups, task_to_exception
 
 
 def discover_unfinished(
@@ -174,7 +176,8 @@ def exception_type_histogram(result: dict) -> dict[str, int]:
     return counts
 
 
-def format_output(names: list[str], fmt: str) -> str:
+def format_output(names: list[str], fmt: str,
+                  annotated: list[tuple[str, str]] | None = None) -> str:
     if fmt == "lines":
         return "\n".join(names)
     if fmt == "csv":
@@ -183,6 +186,17 @@ def format_output(names: list[str], fmt: str) -> str:
         return " ".join(f"--include-task-name {n}" for n in names)
     if fmt == "harbor-exclude":
         return " ".join(f"--exclude-task-name {n}" for n in names)
+    if fmt == "annotated":
+        # machine-readable task names (grep '^[^#]' to extract)
+        # then human-readable section with exception info in comments
+        if not annotated:
+            annotated = [(n, "") for n in names]
+        machine = "\n".join(n for n, _ in annotated)
+        max_w = max((len(n) for n, _ in annotated), default=0)
+        human  = "\n".join(
+            f"# {n:<{max_w}}  {exc}" for n, exc in annotated
+        )
+        return machine + "\n#\n" + human
     raise ValueError(f"Unknown format: {fmt}")
 
 
@@ -200,9 +214,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--format",
-        choices=["lines", "csv", "harbor-include", "harbor-exclude"],
+        choices=["lines", "csv", "harbor-include", "harbor-exclude", "annotated"],
         default="lines",
-        help="Output format. Default: lines (one name per line).",
+        help="Output format. Default: lines (one name per line). "
+             "'annotated' adds exception type as # comments below task names.",
     )
     parser.add_argument(
         "--exception-type",
@@ -227,7 +242,7 @@ def main() -> int:
         result = json.load(f)
 
     trial_to_task = build_trial_to_task_map(args.job_dir)
-    groups = classify_trials(result, trial_to_task, exception_filter=args.exception_type)
+    groups, task_to_exc = classify_trials(result, trial_to_task, exception_filter=args.exception_type)
     known = set().union(*groups.values())
     groups["unfinished"] = discover_unfinished(trial_to_task, known)
 
@@ -254,7 +269,11 @@ def main() -> int:
         print("WARNING: no tasks matched", file=sys.stderr)
         return 1
 
-    print(format_output(names, args.format))
+    if args.format == "annotated":
+        annotated = [(n, task_to_exc.get(n, "")) for n in names]
+        print(format_output(names, args.format, annotated=annotated))
+    else:
+        print(format_output(names, args.format))
     return 0
 
 

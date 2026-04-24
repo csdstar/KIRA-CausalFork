@@ -169,6 +169,75 @@ def parse_cf_stats_from_log(trial_log: Path) -> dict | None:
     }
 
 
+# Matches the per-step planner stats JSON embedded in agent message text.
+_CF_STEP_RE = re.compile(
+    r'"changed_plan"\s*:\s*(true|false).*?'
+    r'"planner_extra_llm_calls"\s*:\s*(\d+).*?'
+    r'"planner_extra_input_tokens"\s*:\s*(\d+).*?'
+    r'"planner_extra_output_tokens"\s*:\s*(\d+).*?'
+    r'"planner_extra_cost_usd"\s*:\s*([\d.]+)',
+    re.DOTALL,
+)
+_CF_MODE_RE = re.compile(r'"planner_mode"\s*:\s*"([^"]+)"')
+_CF_TRIGGERED_RE = re.compile(r'"planner_triggered"\s*:\s*(true|false)')
+
+
+def parse_cf_stats_from_trajectory(trajectory_path: Path) -> dict | None:
+    """Aggregate per-step CF planner stats from trajectory.json.
+
+    Used as fallback when trial.log contains no [KIRA CF STATS] line.
+    Stats are embedded in the agent message text as a JSON fragment produced
+    by the CounterfactualPlanner on every step.
+    """
+    try:
+        with trajectory_path.open() as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+    llm_calls = inp = out = 0
+    cost = 0.0
+    episodes_triggered = changed_plans = 0
+    mode_counts: dict[str, int] = {}
+    found_any = False
+
+    for step in data.get("steps", []):
+        if step.get("source") != "agent":
+            continue
+        msg = step.get("message", "")
+        m = _CF_STEP_RE.search(msg)
+        if not m:
+            continue
+        found_any = True
+        if m.group(1) == "true":
+            changed_plans += 1
+        llm_calls += int(m.group(2))
+        inp       += int(m.group(3))
+        out       += int(m.group(4))
+        cost      += float(m.group(5))
+
+        tm = _CF_TRIGGERED_RE.search(msg)
+        if tm and tm.group(1) == "true":
+            episodes_triggered += 1
+
+        mm = _CF_MODE_RE.search(msg)
+        if mm:
+            mode = mm.group(1)
+            mode_counts[mode] = mode_counts.get(mode, 0) + 1
+
+    if not found_any:
+        return None
+    return {
+        "episodes_triggered": episodes_triggered,
+        "changed_plans": changed_plans,
+        "llm_calls": llm_calls,
+        "input_tokens": inp,
+        "output_tokens": out,
+        "cost_usd": cost,
+        "mode_counts": mode_counts,
+    }
+
+
 def aggregate_cf_sidecars(trial_dir: Path) -> dict[str, int]:
     """Count planner_mode frequencies across all per-episode *_cf.json files."""
     counts: dict[str, int] = {}
@@ -219,6 +288,8 @@ def load_job(job_dir: Path) -> JobSummary:
         ) = parse_trajectory_tokens(child / "agent" / "trajectory.json")
 
         cf = parse_cf_stats_from_log(child / "trial.log")
+        if cf is None:
+            cf = parse_cf_stats_from_trajectory(child / "agent" / "trajectory.json")
         if cf:
             td.cf_llm_calls = cf["llm_calls"]
             td.cf_input_tokens = cf["input_tokens"]
@@ -226,8 +297,12 @@ def load_job(job_dir: Path) -> JobSummary:
             td.cf_cost_usd = cf["cost_usd"]
             td.cf_episodes_triggered = cf["episodes_triggered"]
             td.cf_changed_plans = cf["changed_plans"]
+            # trajectory-based parsing also returns per-step mode counts directly
+            if "mode_counts" in cf:
+                td.cf_mode_counts = cf["mode_counts"]
 
-        td.cf_mode_counts = aggregate_cf_sidecars(child)
+        if not td.cf_mode_counts:
+            td.cf_mode_counts = aggregate_cf_sidecars(child)
 
         # If the same task appears in multiple trials, keep the most recent one
         # (harbor re-runs produce unique trial suffixes but same task_name).
